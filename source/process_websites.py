@@ -9,187 +9,258 @@ import lxml
 import re
 import requests
 from langdetect import detect_langs
+from tqdm import tqdm
 
-def get_yelp_data(path):
-  with open(path, 'r') as file:
-    raw_data = file.readlines()
-  raw_data = map(lambda x: x.rstrip(), raw_data)
-  json_data = '[' + ','.join(raw_data) + ']'
-  df = pd.read_json(json_data)
-  return df
-
-path = os.path.join('..', '..', 'yelp_data', 'yelp_academic_dataset_business.json')
-df = get_yelp_data(path)
-
-#print(df.info())
-'''
-<class 'pandas.core.frame.DataFrame'>
-RangeIndex: 209393 entries, 0 to 209392
-Data columns (total 14 columns):
- #   Column        Non-Null Count   Dtype  
----  ------        --------------   -----  
- 0   business_id   209393 non-null  object 
- 1   name          209393 non-null  object 
- 2   address       209393 non-null  object 
- 3   city          209393 non-null  object 
- 4   state         209393 non-null  object 
- 5   postal_code   209393 non-null  object 
- 6   latitude      209393 non-null  float64
- 7   longitude     209393 non-null  float64
- 8   stars         209393 non-null  float64
- 9   review_count  209393 non-null  int64  
- 10  is_open       209393 non-null  int64  
- 11  attributes    180348 non-null  object 
- 12  categories    208869 non-null  object 
- 13  hours         164550 non-null  object 
-dtypes: float64(3), int64(2), object(9)
-memory usage: 22.4+ MB
-'''
-
-#print(set(df['stars']))
-
-with open(os.path.join('..','..','yelp_data','saved_links.txt'), 'r') as file:
-  s = file.read()
-  s = re.sub('[\[\]\']', ' ', s)
-  urls = s.split(',')
-
-# some found urls (not many! a few of them) are digits! Recheck yelp.com html file to resolve the issues.
-urls = [None if (url.strip() == 'None' or url.strip()[0].isdigit()) else url.strip() for url in urls]
-
-#print(urls[:5])
-#['http://www.therangeatlakenorman.com/', 'None', 'http://www.felinus.ca', 'None', 'https://www.usemyguyservices.com']
-
-n = len(df)
-#print('Number of processed entries = ', len(urls))
-#Number of processed entries =  58977
-
-urls = urls + list(np.nan for _ in range(n - len(urls)))
-#print('Number of entries = ', n)
-#Number of entries =  209393
-
-df['url'] = urls
-#df.replace('None', np.nan, inplace=True)
-df = df[pd.notnull(df['url'])]
-
-#print('Shape of dataframe = ', df.shape)
-#Shape of dataframe =  (37291, 15)
-
-#pd.set_option('display.max_rows', None)
-#pd.set_option('display.max_columns', None)
-#print(df.head())
-'''
-              business_id                          name  \
-0  f9NumwFMBDn751xgFiRbNA      The Range At Lake Norman   
-2  XNoUzKckATkOD1hP6vghZg                       Felinus   
-4  51M2Kk903DFYI6gnB5I6SQ       USE MY GUY SERVICES LLC   
-5  cKyLV5oWZJ2NudWgqs8VZw   Oasis Auto Center - Gilbert   
-7  ScYkbYNkDgCneBrD9vqhCQ  Junction Tire & Auto Service   
-
-                     address       city state postal_code   latitude  \
-0            10913 Bailey Rd  Cornelius    NC       28031  35.462724   
-2      3554 Rue Notre-Dame O   Montreal    QC     H4C 1P4  45.479984   
-4         4827 E Downing Cir       Mesa    AZ       85205  33.428065   
-5  1720 W Elliot Rd, Ste 105    Gilbert    AZ       85233  33.350399   
-7        6910 E Southern Ave       Mesa    AZ       85209  33.393885   
-
-    longitude  stars  review_count  is_open  \
-0  -80.852612    3.5            36        1   
-2  -73.580070    5.0             5        1   
-4 -111.726648    4.5            26        1   
-5 -111.827142    4.5            38        1   
-7 -111.682226    5.0            18        1   
-
-                                          attributes  \
-0  {'BusinessAcceptsCreditCards': 'True', 'BikePa...   
-2                                               None   
-4  {'BusinessAcceptsCreditCards': 'True', 'ByAppo...   
-5             {'BusinessAcceptsCreditCards': 'True'}   
-7  {'BusinessAcceptsCreditCards': 'True', 'ByAppo...   
-
-                                          categories  \
-0  Active Life, Gun/Rifle Ranges, Guns & Ammo, Sh...   
-2                   Pets, Pet Services, Pet Groomers   
-4  Home Services, Plumbing, Electricians, Handyma...   
-5  Auto Repair, Automotive, Oil Change Stations, ...   
-7  Auto Repair, Oil Change Stations, Automotive, ...   
-
-                                               hours  \
-0  {'Monday': '10:0-18:0', 'Tuesday': '11:0-20:0'...   
-2                                               None   
-4  {'Monday': '0:0-0:0', 'Tuesday': '9:0-16:0', '...   
-5  {'Monday': '7:0-18:0', 'Tuesday': '7:0-18:0', ...   
-7  {'Monday': '7:30-17:0', 'Tuesday': '7:30-17:0'...   
-
-                                                 url  
-0               http://www.therangeatlakenorman.com/  
-2                              http://www.felinus.ca  
-4                   https://www.usemyguyservices.com  
-5                         http://oasisautocenter.net  
-7  http://junctiontire.net/tires-auto-repair-mesa-az  
-'''
+from bert import BertModelLayer
+from bert.loader import StockBertConfig, map_stock_config_to_params, load_stock_weights
+from bert.tokenization.bert_tokenization import FullTokenizer
 
 def visible_tags(item):
-  return not item.parent.name in {'meta', 'head', 'script', 'style', '[document]'} and not isinstance(item, Comment)
+    return not item.parent.name in {'meta', 'head', 'script', 'style', '[document]'} and not isinstance(item, Comment)
 
-is_eng = []
-webpage_text = []
-max_text_size = 20 # maximum size for language detection
+def get_corpus(df, output_path=None, df_address_with_corpus=None):
+    if not df_address_with_corpus is None:
+        print('The dataframe already exists. We load the existing file ...')
+        df = pd.read_csv(df_address_with_corpus)
+    else:
+        if os.path.isdir(output_path) is False:
+            print('Error: the output path does not exists!')
+            return
+        is_eng = []
+        webpage_corpus = []
+        max_text_size = 20 # maximum size for language detection
+        for page_content in tqdm(df['webpage_text']):
+            is_eng.append(False)
+            webpage_corpus.append(None)
+            if page_content is np.nan: continue
+            try:
+                soup = BeautifulSoup(page_content, 'html.parser')
+            except:
+                continue
+            texts = soup.findAll(text=True)
+            visible_texts = filter(visible_tags, texts)
+            visible_texts = u' '.join(s.strip() for s in visible_texts)
+            if visible_texts is None: continue
+            visible_texts = visible_texts.replace('`', '')
+            #print(visible_texts[:100])
+            visible_texts = visible_texts.replace('\\n', ' ').replace('\\r', '').replace('\\t', '')
+            #visible_texts = re.sub('\\?', '', visible_texts)
+            visible_texts = re.sub('[^a-zA-Z0-9\s]', '', visible_texts)
+            visible_texts = visible_texts.split()
+            visible_texts = ' '.join(visible_texts)
+            try:
+                langs = detect_langs(visible_texts[:max_text_size])
+                for i in range(min(2, len(langs))):
+                    if langs[i].lang == 'en':
+                        is_eng[-1] = True
+                        webpage_corpus[-1] = visible_texts
+            except Exception as e:
+                #print(e)
+                pass
+
+        df['is_eng'] = is_eng
+        df['webpage_corpus'] = webpage_corpus
+        try:
+            output_path = '' if output_path is None else output_path
+            df.to_csv(os.path.join(output_path, 'business_with_corpus.csv'))
+        except Exception as e:
+            print(e)
+    return df
+
+def clean_categories(df_in, map_classes):
+    df = df_in[df_in['categories'].notnull()]
+    df['categories'] = df['categories'].apply(lambda x: re.split('[,;&]', x))
+    cat = {}
+    bad = []
+    for x in df['categories']:
+        flg = False
+        for cls in x:
+            cls = cls.strip()
+            if not cls in map_classes: continue
+            flg = True
+            mapped_cls = map_classes[cls]
+            if mapped_cls not in cat: cat[mapped_cls]=1
+            else: cat[mapped_cls]+=1
+        if flg is False:
+            bad.append(x)
+            
+    new_cat = []
+    val = 0
+    for arr in df['categories']:
+        new_cat.append(None)
+        for x in arr:
+            cls = x.strip()
+            if not cls in map_classes:
+                continue
+            val += 1
+            new_cat[-1] = map_classes[cls]
+            break
+            
+    df['categories'] = new_cat
+    df = df[df['categories'].notnull()]
+    return df
+
+def flatten_layers(root_layer):
+    if isinstance(root_layer, keras.layers.Layer):
+        yield root_layer
+    for layer in root_layer._layers:
+        for sub_layer in flatten_layers(layer):
+            yield sub_layer
+
+def freeze_bert_layers(l_bert):
+    """
+    Freezes all but LayerNorm and adapter layers - see arXiv:1902.00751.
+    """
+    for layer in flatten_layers(l_bert):
+        if layer.name in ["LayerNorm", "adapter-down", "adapter-up"]:
+            layer.trainable = True
+        elif len(layer._layers) == 0:
+            layer.trainable = False
+        l_bert.embeddings_layer.trainable = False
 
 
-for url in df['url']:
-  is_eng.append(False)
-  webpage_text.append(None)
-  try:
-    page = requests.get(url, stream=True, timeout=10.0)
-    page.encoding = 'utf-8' 
-  except:
-    continue
-  soup = BeautifulSoup(page.content, 'lxml')
-  texts = soup.findAll(text=True)
-  visible_texts = filter(visible_tags, texts)
-  visible_texts = u' '.join(s.strip() for s in visible_texts)
-  if visible_texts is None: continue
-  try:
-    langs = detect_langs(visible_texts[:max_text_size])
-    for i in range(min(2, len(langs))):
-      if langs[i].lang == 'en':
-        is_eng[-1] = True
-        webpage_text[-1] = visible_texts
-  except:
-    pass
+class categoryDetection:    
+    def __init__(self, train, test, tokenizer: FullTokenizer, text_colname=None, label_colname=None, max_seq_len=128):
+        """  
+        """
+        self.text_colname = 'webpage_corpus' if text_colname is None else text_colname
+        if not self.text_colname in train.columns or not self.text_colname in test.columns:
+            print('Error: Please specify a proper column name in the input dataframe as the corpus.')
+            return
+        
+        self.label_colname = 'categories' if label_colname is None else label_colname
+        if not self.label_colname in train.columns or not self.label_colname in test.columns:
+            print('Error: Please specify a proper column name in the input dataframe as the labels.')
+            return
+        
+        try:
+            nltk.data.find('tokenizers/punkt')
+        except LookupError:
+            nltk.download('punkt')
+        if sys.version_info > (3.0):
+            os.system('python3 -m nltk.downloader stopwords')
+        else:
+            os.system('pyhton -m nltk.downloader.stopwords')
+        
+        self.classes = train[self.label_colname].unique().tolist()
+        self.classes.sort()
+        
+        train = train.dropna(subset=[self.text_colname])
+        test = test.dropna(subset=[self.text_colname])
+        
+        self.max_seq_len = 0
+        self.tokenizer = tokenizer
+        (self.train_x, self.train_y), (self.test_x, self.test_y) = map(self._tokanize, [train, test])
+        self.max_seq_len = min(self.max_seq_len, max_seq_len)
+        self.train_x, self.test_x = map(self._cut_with_padding, [self.train_x, self.test_x])
+    
+    def build_model(self, bert_config_file, bert_ckpt_file, dropout=0.5, adapter_size=64):
+        """
+        """
+        bert = self._load_bert(bert_config_file, bert_ckpt_file, adapter_size)
+        input_ = keras.layers.Input(shape=(self.max_seq_len, ), dtype='int64', name="input_ids")
+        x = bert(input_)
+        #get the first embedding from the output of BERT
+        x = keras.layers.Lambda(lambda seq: seq[:,0,:])(x)
+        
+        x = keras.layers.Dropout(dropout)(x)
+        x = keras.layers.Dense(800, activation='relu')(x)
+        #x = keras.layers.Dense(300, activation='relu')(x)
+        output_ = keras.layers.Dense(units=len(self.classes), activation='softmax')(x)
+        
+        model = keras.Model(inputs=input_, outputs=output_)
+        model.build(input_shape=(None, self.max_seq_len))
+        
+        load_stock_weights(bert, bert_ckpt_file)
+        
+        if adapter_size is not None:
+          freeze_bert_layers(bert)
+ 
+        return model
+    
+    def _load_bert(self, bert_config_file, bert_ckpt_file, adapter_size):
+        try:
+            with tf.io.gfile.GFile(bert_config_file, 'r') as gf:
+                bert_config = StockBertConfig.from_json_string(gf.read())
+                bert_params = map_stock_config_to_params(bert_config)
+                bert_params.adapter_size = adapter_size
+                bert = BertModelLayer.from_params(bert_params, name='bert')
+                return bert
+        except Exception as e:
+            print(e)
+    
+    def _tokanize(self, df):
+        """
+        """
+        X, y = [], []
+        all_tokens = []
+        for _, entry in tqdm(df.iterrows()):
+            corpus, label = entry[self.text_colname], entry[self.label_colname]
+            tokens = self.tokenizer.tokenize(corpus)
+            tokens = self._clean_tokens(tokens)
+            tokens = ['[CLS]'] + tokens + ['[SEP]']
+            L = 0
+            for x in tokens:
+                if '#' in x: continue
+                L += 1
+            L -= 2
+            if L <= 50:
+            #    print(tokens)
+                continue
+            all_tokens.append(tokens)
+            ids = self.tokenizer.convert_tokens_to_ids(tokens)
+            self.max_seq_len = max(self.max_seq_len, len(ids))
+            X.append(ids)
+            y.append(self.classes.index(label))
+            
+        print('{}%'.format(len(X) / len(df) * 100.0))
+        all_tokens = sorted(all_tokens, key=lambda x: len(x))
+        #print(all_tokens[:20])
+        
+        return np.asarray(X), np.asarray(y)
+    
+    
+    def _clean_tokens(self, tokens):
+        # STOPS = set(stopwords.words('english'))
+        clean_tokens = []
+        for token in tokens:
+            if any(map(str.isdigit, token)): 
+                continue
+            clean_tokens.append(token)
+        return clean_tokens
+    def _cut_with_padding(self, ids):
+        """
+        """
+        X = []
+        CLS_id = self.tokenizer.convert_tokens_to_ids(['[CLS]'])
+        SEP_id = self.tokenizer.convert_tokens_to_ids(['[SEP]'])
+        for token_id in ids:
+            # ignore tokens '[CLS]' and '[SEP]' for now
+            arr = token_id[1:-1]
+            sz = min(len(arr), self.max_seq_len - 2)
+            arr = CLS_id + arr[:sz] + SEP_id
+            # pad the remaining cells with zero
+            arr = arr + [0] * (self.max_seq_len - len(arr))
+            X.append(np.asarray(arr))
+        return np.asarray(X)
 
-df['is_eng'] = is_eng
-df['webpage_text'] = webpage_text
+    
+def compile_model(cat:categoryDetection, model, validation_split=0.05, batch_size=16, n_epochs=30, shuffle=True):
+    #log_dir = "/home/wliang_google_com/Documents/workspace/notebook/.log/website_rating/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%s")
+    #tensorboard_callback = keras.callbacks.TensorBoard(log_dir=log_dir)
 
-#dt = str(datetime.datetime.now())
-#dt = dt[:dt.find('.')].replace(' ', '_').replace(':','-')i
-#file_name = 'business_{}.csv'.format(dt)
-file_name = 'business.csv'
-
-folder_path = os.path.join('..', '..', 'yelp_data', 'updated')
-if not os.path.exists(folder_path):
-  os.makedirs(folder_path)
-file_path = os.path.join(folder_path, file_name)
-
-
-df.to_csv(file_path, index=False, header=True)
-print('Check out{}'.format(str(file_path)))
-
-#pd.set_option('display.max_columns', None)
-#df2 = pd.read_csv(file_path)
-#print(df2.head())
-'''
-                                                 url  is_eng  \
-0               http://www.therangeatlakenorman.com/    True   
-1                              http://www.felinus.ca   False   
-2                   https://www.usemyguyservices.com    True   
-3                         http://oasisautocenter.net    True   
-4  http://junctiontire.net/tires-auto-repair-mesa-az    True   
-
-                                        webpage_text  
-0   Shooting Ranges, Gun Rental Charlotte NC | Th...  
-1                                                NaN  
-2   Home Renovations and Repairs Phoenix, AZ | Ho...  
-3   Home - Oasis Auto CenterOasis Auto Center    ...  
-4   Contact Junction Tire | Tires & Auto Repair S...  
-'''
+    model.compile(optimizer=keras.optimizers.Adam(1e-5),
+              loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+              metrics=[keras.metrics.SparseCategoricalAccuracy(name='acc')])
+    print(model.summary())
+    # early_stopping = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=5)
+    history = model.fit(
+        x=cat.train_x,
+        y=cat.train_y,
+        validation_split=validation_split,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        verbose=1,
+        epochs=n_epochs,
+        #callbacks=[tensorboard_callback],
+    )
