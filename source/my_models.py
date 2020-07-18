@@ -28,13 +28,25 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import classification_report
 from scipy.spatial import distance
 
+class style():
+    BLACK = '\033[30m'
+    RED = '\033[31m'
+    GREEN = '\033[32m'
+    YELLOW = '\033[33m'
+    BLUE = '\033[34m'
+    MAGENTA = '\033[35m'
+    CYAN = '\033[36m'
+    WHITE = '\033[37m'
+    UNDERLINE = '\033[4m'
+    RESET = '\033[0m'
+
 FOLDER_PATH = '/home/vahidsanei_google_com/'
 
 
 class categoryDetection:    
 	def __init__(self, train, test, tokenizer: FullTokenizer, text_colname=None, 
 		label_colname=None, max_seq_len=128, glove_embeddings_address=None, word_similarity=False, glove_sentence_similarity=False,
-		bert_sentence_similarity=False, bert_config_file=None, bert_ckpt_file=None):
+		bert_sentence_similarity=False, bert_config_file=None, bert_ckpt_file=None, bert_pretrained_max_sent_len=None):
 		"""  
 		"""
 		self.text_colname = 'webpage_corpus' if text_colname == None else text_colname
@@ -86,20 +98,23 @@ class categoryDetection:
 					print('Error: the embedding of {} is not provided'.format(cls))
 					return
 		if bert_sentence_similarity == True:
-			(pretrain_train_x, pretrain_train_y) = self._prepare_for_pretraining(train)
+			(pretraintrain_x, pretraintrain_y) = self._prepare_for_pretraining(train, max_sentence_len=bert_pretrained_max_sent_len)
 			'''
 				A common plain English guideline says an average of 15–20 words 
 				(Cutts, 2009; Plain English Campaign, 2015; Plain Language Association InterNational, 2015).
 			'''
-			self.pretrain_model = self.build_model(bert_config_file, bert_ckpt_file, max_seq_len=20, n_dense_layer=1, adapter_size=None)
+			self.pretrain_model = self.build_model(bert_config_file, bert_ckpt_file, max_seq_len=bert_pretrained_max_sent_len, n_dense_layer=1, adapter_size=None)
 			print('Pretraining model ...')
 			sys.stdout.flush()
-			self.compile_model(self.pretrain_model, pretrain_train_x, pretrain_train_y, validation_split=0.0, batch_size=32, n_epochs=10)
+			random_perm = np.random.permutation(len(pretraintrain_x))
+			balanced_pretrain_x, balanced_pretrain_y = self._balance_classes(pretraintrain_x[random_perm], pretraintrain_y[random_perm])
+			self.compile_model(self.pretrain_model, balanced_pretrain_x, balanced_pretrain_y, validation_split=0.0, batch_size=32, n_epochs=10)
 
 		self.print_bert_sim_cnt = 0
-		(self.train_x, self.train_y), (self.test_x, self.test_y) = map(self._tokanize, [train, test])
+		(self.train_x, self.train_y), (self.test_x, self.test_y) = map(functools.partial(self._tokanize, max_sentence_len=bert_pretrained_max_sent_len), [train, test])
 		self.max_seq_len = min(self.max_seq_len, max_seq_len)
 		self.train_x, self.test_x = map(functools.partial(self._padding, max_seq_len=self.max_seq_len, with_cls_sep=True), [self.train_x, self.test_x])
+		self.balanced_train_x, self.balanced_train_y = self._balance_classes(self.train_x, self.train_y)
 
 	def build_model(self, bert_config_file, bert_ckpt_file, max_seq_len, dropout=0.4, n_dense_layer=2, dense_size=800, adapter_size=64):
 		"""
@@ -220,7 +235,7 @@ class categoryDetection:
 		y_pred = self.pretrain_model.predict([id_])
 		return np.max(y_pred)
 	
-	def _sort_sentences_with_bert_similarity(self, corpus):
+	def _sort_sentences_with_bert_similarity(self, corpus, max_sentence_len=50):
 		ran = random() if self.print_bert_sim_cnt < 5 else 1.0
 		if self.print_bert_sim_cnt <= 5 and ran < 0.05:
 			print(corpus[:1000])
@@ -228,7 +243,7 @@ class categoryDetection:
 		sentences = corpus.split('#')
 		sentence_with_similarity = []
 		for sentence in sentences:
-			sentence_with_similarity.append([sentence, self._compute_bert_sentence_similarity(sentence)])
+			sentence_with_similarity.append([sentence, self._compute_bert_sentence_similarity(sentence, max_sentence_len=max_sentence_len)])
 		sentence_with_similarity = sorted(sentence_with_similarity, key=lambda x: x[1], reverse=True)
 		
 		sorted_sents = []
@@ -270,7 +285,7 @@ class categoryDetection:
 			mx = max(mx, 1.0 - distance.cosine(word_embedding, self.word2vec[cls]))
 		return mx
 
-	def _tokanize(self, df):
+	def _tokanize(self, df, max_sentence_len=None):
 		"""
 		"""
 		X, y = [], []
@@ -281,7 +296,7 @@ class categoryDetection:
 				corpus = self._sort_sentences_with_glove_similarity(corpus)
 				
 			if self.bert_sentence_similarity == True:
-				corpus = self._sort_sentences_with_bert_similarity(corpus)
+				corpus = self._sort_sentences_with_bert_similarity(corpus, max_sentence_len=max_sentence_len)
 				
 			tokens = self.tokenizer.tokenize(corpus)
 			tokens = self._clean_tokens(tokens)
@@ -347,6 +362,24 @@ class categoryDetection:
 			id_ = self._cut_with_padding(token_id, self.max_seq_len)
 			X.append(np.asarray(id_))
 		return np.asarray(X)
+	
+	def _balance_classes(self, in_X, in_y):
+		count = [0 for _ in range(len(self.classes))]
+		for label in in_y:
+			count[label] += 1
+		mn = len(in_X)
+		for i in range(len(count)):
+			mn = min(mn, count[i])
+		print('size of each balanced class = ', mn)
+		count = [0 for _ in range(len(self.classes))]
+		X, y = [], []
+		for tokens, label in zip(in_X, in_y):
+			assert count[label] <= mn, 'count is greater than mn!'
+			if count[label] == mn: continue
+			count[label] += 1
+			X.append(tokens)
+			y.append(label)
+		return np.asarray(X), np.asarray(y)
 
 
 	def compile_model(self, model, train_x, train_y, validation_split=0.05, batch_size=16, n_epochs=30, shuffle=True):
@@ -372,71 +405,113 @@ def unify_yelp_data_classes(df, map_classes = {
                 'Wine': 'Food', 'Sandwiches': 'Food', 'Burgers': 'Food', 'Brunch': 'Food', 'Breakfast': 'Food', 'Desserts': 'Food',
                 'Vegetarian': 'Food', 'Vegan': 'Food', 
 
-                'Health': 'Health', 'Dentists': 'Health', 'Doctors': 'Health', 'Medical Centers': 'Health', 'Drugstores': 'Health',
-                'Services': 'Health', 
+                'Health': 'Health', 'Dentists': 'Health', 'Doctors': 'Health', 'Medical Centers': 'Health', 'Drugstores': 'Health', 
 
-                'Local Services': 'Services', 'Car Dealers': 'Services', 'Professional Services': 'Services', 
-                'Home Services': 'Services','Garden': 'Services', 'Real Estate': 'Services',
-                'Auto Repair': 'Services', 'Pet Services': 'Services', 'Home Cleaning': 'Services', 
-                'Public Services': 'Services', 'Home Decor': 'Services', 
-                'Automotive': 'Services', 'Pets': 'Services', 'Education': 'Services',
+                'Car Dealers': 'Car', 'Automotive': 'Car', 'Auto Repair': 'Car',
+                 
+                'Home Services': 'Housework','Garden': 'Housework',
+                'Pet Services': 'Housework', 'Home Cleaning': 'Housework', 'Laundry': 'Housework', 'Laundry Services': 'Housework',
+                'Home Decor': 'Housework', 'Pets': 'Housework', 'Carpet Cleaning': 'Housework',
     
-                'Hair Salons': 'Services', 'Nail Salons': 'Services', 'Beauty': 'Services', 'Hair Salons': 'Services', 'Makeup Artists': 'Services',
-                'Hair Removal': 'Services', 'Massage': 'Services', 'Barbers': 'Services', 'Beauty Supply': 'Services',
+                'Hair Salons': 'Beauty', 'Nail Salons': 'Beauty', 'Beauty': 'Beauty', 'Hair Salons': 'Beauty', 'Makeup Artists': 'Beauty',
+                'Hair Removal': 'Beauty', 'Massage': 'Beauty', 'Barbers': 'Beauty', 'Beauty Supply': 'Beauty',
                 
-                'Entertainment': 'Entertainment', 'Event Planning': 'Entertainment', 'Golf': 'Entertainment',
+                'Entertainment': 'Entertainment', 
                 'Active Life': 'Entertainment', 'Nightlife': 'Entertainment',
+                #'Hotels': 'Entertainment', 'Travel': 'Entertainment', 
+                'Hobby Shops': 'Entertainment', 
 
-                'Hotels': 'Entertainment', 'Travel': 'Entertainment',
-    
-                'Jewelry': 'Entertainment', 'Shopping': 'Entertainment', 'Hobby Shops': 'Entertainment', 
-
-                'Fitness': 'Entertainment', 'Sporting Goods': 'Entertainment', 'Gyms': 'Entertainment', 'Sports Bars': 'Entertainment', 
+                'Fitness': 'Fitness', 'Sporting Goods': 'Fitness', 'Gyms': 'Fitness', 'Sports Bars': 'Fitness', 'Golf': 'Fitness',
+                
+                'Education': 'Education',
+                
+                'DUI Law': 'Law', 'Lawyers': 'Law', 'Real Estate': 'Law', 'Real Estate Law': 'Law', 'Divorce': 'Law',
             
                 'Banks': 'Financial', 'Financial Services': 'Financial',
     
-                'Mass Media': 'Entertainment',
-                
-                'Churches': 'Religious', 'Religious': 'Religious', 'Religious Organizations': 'Religious'
+                #'Mass Media': 'Entertainment',
+                #'Churches': 'Religious', 'Religious': 'Religious', 'Religious Organizations': 'Religious'
         }
-                ):
+    , show_skipped=False):
 		
 	df = df[df['categories'].notnull()]
 	df['categories'] = df['categories'].apply(lambda x: re.split('[,;&]', x))
 	
+	if show_skipped == True:
+		show_skipped_classes(df, map_classes)
+		return df
+		
 	cat = []
-	val = 0
 	for arr in df['categories']:
 		cat.append(None)
+		majority_vote = {}
 		for x in arr:
 			cls = x.strip()
 			if not cls in map_classes:
 				continue
-			val += 1
-			cat[-1] = map_classes[cls].lower()
-			break
+			y_str = map_classes[cls].lower()
+			if y_str not in majority_vote: majority_vote[y_str] = 0
+			else: majority_vote[y_str] += 1
+		if len(majority_vote) != 0:
+			cat[-1] = max(majority_vote, key=lambda k: majority_vote.get(k))
 	df['categories'] = cat
 	df = df[df['categories'].notnull()]
+	if show_skipped == True:
+		show_skipped_classes(df, map_classes)
 	return df
 
-'''
-This to check which entires are removed due to not belonging to any defined classes
-cat = {}
-bad = []
-for x in df.categories:
-    flg = False
-    for cls in x:
-        cls = cls.strip()
-        if not cls in map_classes: continue
-        flg = True
-        mapped_cls = map_classes[cls]
-        if mapped_cls not in cat: cat[mapped_cls]=1
-        else: cat[mapped_cls]+=1
-    if flg is False:
-        bad.append(x)
-        
-print(len(bad))
-'''
+def show_skipped_classes(df, map_classes):
+	#This function is to check which entires are removed due to not belonging to any defined classes
+	cat = {}
+	bad = []
+	for x in df.categories:
+		flg = False
+		for cls in x:
+			cls = cls.strip()
+			if not cls in map_classes: continue
+			flg = True
+			mapped_cls = map_classes[cls]
+			if mapped_cls not in cat: cat[mapped_cls]=1
+			else: cat[mapped_cls]+=1
+		if flg is False:
+			bad.append(x)
+			
+	print(bad[:50], '\n', len(bad))
+	
+def get_classes_distribution(train_y, classes):
+	count = {}
+	for y in train_y:
+		if y not in count: count[y] = 0
+		count[y] += 1
+	for y in np.unique(train_y):
+		print(f'class {classes[y]} = {round(count[y] / len(train_y) * 100.0, 2)}%')
+		
+def testing(text, trained_model, cat:categoryDetection, LEN=300):
+    tokens = cat.tokenizer.tokenize(text)
+    ids = cat.tokenizer.convert_tokens_to_ids(tokens)
+    ids = ids + [0 for _ in range(LEN  - len(ids))]
+    ids = ids[:LEN]
+    y_pred = trained_model.predict([ids])
+    print(cat.classes[np.argmax(y_pred)])
+    prediction = [f'{round(y_ * 100, 2)}%' for y_ in y_pred[0]]
+    print(list(zip(prediction, cat.classes)))
+    
+def find_wrongs(cat, model, count=20):
+    cnt = 0
+    for ids, label in zip(cat.test_x, cat.test_y):
+        if cnt == count:
+            break
+        y_pred = np.argmax(model.predict(np.asarray([ids])))
+        if y_pred != label:
+            corpus = cat.tokenizer.convert_ids_to_tokens(ids)
+            print(' '.join(corpus), '\n', f'{style.GREEN}label = {cat.classes[label]} {style.RED}predicted = {cat.classes[y_pred]}{style.RESET}')
+            print('*' * 100)
+            cnt += 1    
+def plot_classes_distribution(df, class_name='categories'):
+	chart = sns.countplot(df[class_name], palette='hls')
+	plt.title('Number of business per Category')
+	chart.set_xticklabels(chart.get_xticklabels(), horizontalalignment='center', rotation=90)
+	plt.show();
 
 if __name__ == '__main__':
 	# for testing
