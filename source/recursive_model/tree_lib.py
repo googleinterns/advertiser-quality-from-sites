@@ -57,11 +57,12 @@ class Node:
 		self.children = None
 		self.is_leaf = False
 			
-def read_trees(df, col_name='encoded_tree'):
+def read_trees(df, col_name='encoded_tree', verbose=1):
 	if isinstance(df, pd.core.frame.DataFrame):
-		sys.stdout.write('Read trees:\n')
-		sys.stdout.flush()
-		trees = [Tree(tree_str) if col_name is not None else None for tree_str in tqdm(df[col_name])]
+		if verbose > 0:
+			sys.stdout.write('Reading trees:\n')
+			sys.stdout.flush()
+		trees = [Tree(tree_str) if col_name is not None else None for tree_str in (tqdm(df[col_name]) if verbose == 1 else df[col_name])]
 		return trees
 	else:
 		sys.stdout.write('ERROR: input_ data is {type(input_)}, but the function admits pandas data frame type.')
