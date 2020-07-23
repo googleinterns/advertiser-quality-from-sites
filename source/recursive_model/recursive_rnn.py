@@ -1,4 +1,4 @@
-import sys, os, math, time, itertools, shutil
+import sys, os, math, time, itertools, shutil, random
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -16,9 +16,9 @@ from bert.tokenization.bert_tokenization import FullTokenizer
 import tree_lib
 
 class Configuration():
-	def __init__(self, input_df=None, lr=1e-2, n_epochs=20, l2=0.02, test_split_ratio=0.2, val_split_ratio=None, anneal_factor=1.5, 
+	def __init__(self, input_df=None, lr=1e-3, n_epochs=20, l2=0.01, test_split_ratio=0.2, val_split_ratio=None, anneal_factor=2, 
 			anneal_tolerance=0.98, patience_early_stopping=5, max_depth=None, n_classes=None, bert_folder_path=None, 
-			bert_embedding_size=768, embedding_size=300, max_content_length=50, verbose=1):
+			bert_embedding_size=768, embedding_size=64, max_content_length=40, verbose=1):
 		assert input_df is not None, 'input df cannot be None'
 		assert n_classes is not None, '# of classes must be specified'
 		assert bert_folder_path is not None, 'input files for BERT must be specified'
@@ -55,23 +55,22 @@ class RecursiveModel():
 	
 	def __init__(self, configuration):
 		self.configuration = configuration
-		self.__set_model_name_and_path_weights__()
-		
+		self.__set_model_name_and_path_weights__()				
 		trees = tree_lib.read_trees(self.configuration.input_df, verbose=self.configuration.verbose)
+		
 		random.shuffle(trees)
-			
-		self.bert_model = self.load_bert()
-		if self.configuration.verbose > 0:
-			sys.stdout.write(' [Preprocessing step] Get embeddings of node texts:\n')
-			sys.stdout.flush()
-		for tree in (tqdm(trees) if self.configuration.verbose > 0 else trees):
-			self.__content_to_embedding__(tree.root)		
-			
 		###################################
 		### for testing
 		trees = trees[:1000]
 		###################################
 			
+		self.bert_model = self.load_bert()
+		if self.configuration.verbose > 0:
+			sys.stdout.write(' [Preprocessing step] Get embeddings of leaves contents:\n')
+			sys.stdout.flush()
+		for tree in (tqdm(trees) if self.configuration.verbose > 0 else trees):
+			self.__content_to_embedding__(tree.root)		
+
 		tf.disable_v2_behavior()
 		tf.disable_eager_execution()
 		
@@ -85,22 +84,21 @@ class RecursiveModel():
 			self.train_trees = self.train_trees[:split_size]
 			
 		if self.configuration.verbose > 0:
-			sys.stdout.write(f' Training data distribution with total = {len(self.train_trees)} entries\n')
+			sys.stdout.write(f' Training data distribution with {len(self.train_trees)} entries\n')
 			sys.stdout.flush()
 			self.__cls_distributions__(self.train_trees)
 			
 			if self.val_trees is not None:
-				sys.stdout.write(f' Validation data distribution with total = {len(self.val_trees)} entries\n')
+				sys.stdout.write(f' Validation data distribution with {len(self.val_trees)} entries\n')
 				sys.stdout.flush()
 				self.__cls_distributions__(self.val_trees)
 			
-			sys.stdout.write(f' Test data distribution with total = {len(self.test_trees)} entries\n')
+			sys.stdout.write(f' Test data distribution with {len(self.test_trees)} entries\n')
 			sys.stdout.flush()
 			self.__cls_distributions__(self.test_trees)			
 			
 	def __set_model_name_and_path_weights__(self):
 		self.configuration.model_name = f'{socket.gethostname()}_{self.__class__.__name__}_cls={self.configuration.n_classes}'
-		print(self.configuration.model_name)
 		self.configuration.weights_path = os.path.join('weights', self.configuration.model_name)
 		
 	def __cls_distributions__(self, trees):
@@ -109,9 +107,10 @@ class RecursiveModel():
 			if tree.label not in cls_count: cls_count[tree.label] = 1
 			else: cls_count[tree.label] += 1
 		
-		total = sum(val in tree.values())
-		for key, value in tree.items():
-			sys.stdout.write(' Class {key} has {round(value / total * 100, 2)}% entries.\n')
+		total = sum(cls_count.values())
+		cls_count = dict(sorted(cls_count.items()))
+		for key, value in cls_count.items():
+			sys.stdout.write(f' Class {key} has {round(value / total * 100, 2)}% of entries.\n')
 		sys.stdout.flush()
 		
 	def __content_to_embedding__(self, node):
@@ -153,7 +152,7 @@ class RecursiveModel():
 			with tf.variable_scope('bert_layer', reuse=True):
 				W_bert = tf.get_variable('W_bert')
 				b_bert = tf.get_variable('b_bert')
-			node_tensor = tf.nn.relu(tf.matmul(node.bert_embedding, W_bert) + b_bert)
+			node_tensor = tf.nn.relu(tf.add(tf.matmul(node.bert_embedding, W_bert), b_bert))
 		else:	
 			children_tensors_list = []
 			for child in node.children:
@@ -163,7 +162,7 @@ class RecursiveModel():
 			with tf.variable_scope(f'layer{len(node.children)}', reuse=True):
 				W = tf.get_variable(f'W{len(node.children)}')
 				b = tf.get_variable(f'b{len(node.children)}')
-			node_tensor = tf.nn.relu(tf.matmul(children_tensors, W) + b)
+			node_tensor = tf.nn.relu(tf.add(tf.matmul(children_tensors, W), b))
 			
 		return node_tensor
 	
@@ -172,7 +171,7 @@ class RecursiveModel():
 		with tf.variable_scope('output_layer', reuse=True):
 			W = tf.get_variable('W0')
 			b = tf.get_variable('b0')
-		logit = tf.matmul(root_tensor, W) + b
+		logit = tf.add(tf.matmul(root_tensor, W), b)
 		return logit
 		
 	def get_variables(self):
@@ -191,7 +190,7 @@ class RecursiveModel():
 	
 	def _compute_loss(self, label, logit):
 		cross_entropy_loss = tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logit, labels=tf.constant(label)))
-		
+				
 		Ws = []
 		with tf.variable_scope('output_layer', reuse=True):
 			W = tf.get_variable('W0')
@@ -204,9 +203,9 @@ class RecursiveModel():
 			W = tf.get_variable('W_bert')
 			Ws.append(W)
 			
-		total_weight_loss = 0
+		total_weight_loss = tf.Variable(0)
 		for W in Ws:
-			total_weight_loss += tf.nn.l2_loss(W)
+			total_weight_loss = tf.add(total_weight_loss, tf.nn.l2_loss(W))
 		
 		total_loss = self.configuration.l2 * total_weight_loss + cross_entropy_loss
 		return total_loss
@@ -243,7 +242,7 @@ class RecursiveModel():
 						rogbar.update(pos)
 		return predictions, losses
 		
-	def run_epoch(self, new_model, epoch_number):
+	def run_epoch(self, epoch_number):
 		random.shuffle(self.train_trees)
 		losses = []
 		pos = 0
@@ -252,13 +251,13 @@ class RecursiveModel():
 			with tf.Graph().as_default(), tf.Session() as sess:
 				self.get_variables()
 				
-				if new_model == True:
+				if epoch_number == 0 and pos == 0:
 					sess.run(tf.global_variables_initializer())
 				else:
 					saver = tf.train.Saver()
 					saver.restore(sess, weights_path)
 				
-				for _ in range(self.configuration.AVOID_OOM_AT):
+				for i in range(self.configuration.AVOID_OOM_AT):
 					if pos >= len(self.train_trees): break
 		
 					tree = self.train_trees[pos]
@@ -268,7 +267,7 @@ class RecursiveModel():
 					losses.append(l)
 					
 					if self.configuration.verbose > 0:
-						sys.stdout.write(f'\r Epoch={epoch_number + 1}, {pos + 1}/{len(self.train_trees)}: loss = {round(np.mean(losses), 6)}')
+						sys.stdout.write(f'\r Epoch={epoch_number + 1}, {pos + 1}/{len(self.train_trees)}: loss = {np.mean(losses)}')
 						sys.stdout.flush()
 					pos += 1
 					
@@ -302,10 +301,9 @@ class RecursiveModel():
 		best_val_epoch = -1
 		
 		for epoch in range(self.configuration.n_epochs):		
-			new_model = True if epoch == 0 else False
-			epoch_train_accuracies, epoch_val_accuracies, epoch_train_losses, epoch_val_losses = self.run_epoch(new_model=new_model, epoch_number=epoch)
+			epoch_train_accuracies, epoch_val_accuracies, epoch_train_losses, epoch_val_losses = self.run_epoch(epoch_number=epoch)
 			train_acc, val_acc, train_loss, val_loss = np.mean(epoch_train_accuracies), np.mean(epoch_val_accuracies), np.mean(epoch_train_losses), np.mean(epoch_val_losses)
-			sys.stdout.write(f' Train acc={round(train_acc * 100, 3)}%, Val acc = {rand(val_acc * 100, 3)}%, Train loss={round(train_loss, 6)}, Val loss={round(val_loss, 6)}\n')
+			sys.stdout.write(f' Train acc = {round(train_acc * 100, 3)}%, Val acc = {round(val_acc * 100, 3)}%, Train loss = {train_loss}, Val loss = {val_loss}\n')
 			sys.stdout.flush()
 			
 			train_losses.append(np.mean(epoch_train_losses))
@@ -329,7 +327,6 @@ class RecursiveModel():
 class RecursiveModelWithLessParams(RecursiveModel):
 	def __init__(self, configuration):
 		super().__init__(configuration)
-		#self.configuration.model_name = f'recnnwlw_l2={self.l2}_lr={self.lr}_depth={self.max_depth}_cls={self.n_classes}' # wlw stands for "with less weights"
 	
 	# overrided method
 	def get_tensor(self, node):			
@@ -394,8 +391,7 @@ def test_model():
 	bert_folder_path = os.path.join('/home/vahidsanei_google_com/', 'data','uncased_L-12_H-768_A-12')
 	df = pd.read_csv('/home/vahidsanei_google_com/data/yelp_data/trees/df_with_trees.csv')
 	#df = df[:50]
-	configuration = Configuration(input_df=df, val_split_ratio=0.1, max_depth=4, n_classes=10, bert_folder_path=bert_folder_path)
-	
+	configuration = Configuration(input_df=df, max_depth=4, val_split_ratio=0.1, test_split_ratio=0.001, n_classes=10, bert_folder_path=bert_folder_path) 
 	model = RecursiveModel(configuration)
 	
 	start_time = time.time()
@@ -405,15 +401,16 @@ def test_model():
 def test_model2():
 	bert_folder_path = os.path.join('/home/vahidsanei_google_com/', 'data','uncased_L-12_H-768_A-12')
 	df = pd.read_csv('/home/vahidsanei_google_com/data/yelp_data/trees/df_with_trees.csv')
-	configuration = Configuration(input_df=df, val_split_ratio=0.1, n_classes=10, bert_folder_path=bert_folder_path) 
+	#df = df[:50]
+	configuration = Configuration(input_df=df, val_split_ratio=0.1, test_split_ratio=0.001, n_classes=10, bert_folder_path=bert_folder_path) 
 	model = RecursiveModelWithLessParams(configuration)	
-	return
+
 	start_time = time.time()
 	model.train_model()
 	print(f'Training time = {time.time() - start_time}')
 			
 if __name__ == '__main__':
-	test_model2()
+	test_model()
 	
 #shutil.copyfile('./weights/%s.temp.data-00000-of-00001'%self.configuration.model_name, './weights/%s.data-00000-of-00001'%self.configuration.model_name)
 #shutil.copyfile('./weights/%s.temp.index'%self.configuration.model_name, './weights/%s.index'%self.configuration.model_name)

@@ -42,7 +42,6 @@ class style():
 
 FOLDER_PATH = '/home/vahidsanei_google_com/'
 
-
 class categoryDetection:    
 	def __init__(self, train, test, tokenizer: FullTokenizer, text_colname=None, 
 		label_colname=None, max_seq_len=128, glove_embeddings_address=None, word_similarity=False, glove_sentence_similarity=False,
@@ -116,10 +115,10 @@ class categoryDetection:
 		self.train_x, self.test_x = map(functools.partial(self._padding, max_seq_len=self.max_seq_len, with_cls_sep=True), [self.train_x, self.test_x])
 		self.balanced_train_x, self.balanced_train_y = self._balance_classes(self.train_x, self.train_y)
 
-	def build_model(self, bert_config_file, bert_ckpt_file, max_seq_len, dropout=0.4, n_dense_layer=2, dense_size=800, adapter_size=64):
+	def build_model(self, bert_config_file, bert_ckpt_file, max_seq_len, dropout=0.6, n_dense_layer=2, dense_size=800, adapter_size=64):
 		"""
 		"""
-		bert = self._load_bert(bert_config_file, bert_ckpt_file, adapter_size)
+		bert = self._load_bert(bert_config_file, adapter_size)
 		input_ = keras.layers.Input(shape=(max_seq_len, ), dtype='int64', name="input_ids")
 		x = bert(input_)
 		#get the first embedding from thde output of BERT
@@ -140,7 +139,7 @@ class categoryDetection:
 
 		return model
 
-	def _load_bert(self, bert_config_file, bert_ckpt_file, adapter_size):
+	def _load_bert(self, bert_config_file, adapter_size):
 		try:
 			with tf.io.gfile.GFile(bert_config_file, 'r') as gf:
 				bert_config = StockBertConfig.from_json_string(gf.read())
