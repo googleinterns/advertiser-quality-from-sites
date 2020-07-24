@@ -16,9 +16,9 @@ from bert.tokenization.bert_tokenization import FullTokenizer
 import tree_lib
 
 class Configuration():
-	def __init__(self, input_df=None, lr=1e-3, n_epochs=20, l2=0.01, test_split_ratio=0.2, val_split_ratio=None, anneal_factor=2, 
+	def __init__(self, input_df=None, lr=1e-1, n_epochs=20, l2=0.01, test_split_ratio=0.2, val_split_ratio=None, anneal_factor=1.5, 
 			anneal_tolerance=0.98, patience_early_stopping=5, max_depth=None, n_classes=None, bert_folder_path=None, 
-			bert_embedding_size=768, embedding_size=64, max_content_length=40, verbose=1):
+			bert_embedding_size=768, embedding_size=256, max_content_length=128, verbose=1):
 		assert input_df is not None, 'input df cannot be None'
 		assert n_classes is not None, '# of classes must be specified'
 		assert bert_folder_path is not None, 'input files for BERT must be specified'
@@ -203,10 +203,7 @@ class RecursiveModel():
 			W = tf.get_variable('W_bert')
 			Ws.append(W)
 			
-		total_weight_loss = tf.Variable(0)
-		for W in Ws:
-			total_weight_loss = tf.add(total_weight_loss, tf.nn.l2_loss(W))
-		
+		total_weight_loss = tf.reduce_sum([tf.nn.l2_loss(W) for W in Ws])
 		total_loss = self.configuration.l2 * total_weight_loss + cross_entropy_loss
 		return total_loss
 	
@@ -364,11 +361,8 @@ class RecursiveModelWithLessParams(RecursiveModel):
 		with tf.variable_scope('bert_layer', reuse=True):
 			W = tf.get_variable('W_bert')
 			Ws.append(W)
-			
-		total_weight_loss = 0
-		for W in Ws:
-			total_weight_loss += tf.nn.l2_loss(W)
-		
+
+		total_weight_loss = tf.reduce_sum([tf.nn.l2_loss(W) for W in Ws])
 		total_loss = self.configuration.l2 * total_weight_loss + cross_entropy_loss
 		return total_loss
 	
