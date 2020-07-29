@@ -1,11 +1,12 @@
-import pandas as pd
 import sys, os, re
+sys.path.append(os.getcwd() + '/..')
+
+import pandas as pd
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 from bs4.element import Comment, Tag, NavigableString
 
-sys.path.append(os.getcwd() + '/..')
-from my_models import unify_yelp_data_classes
+from utils import utils
 
 class Tree:
 	def __init__(self, encoded_tree):
@@ -69,7 +70,7 @@ def read_trees(df, col_name='encoded_tree', verbose=1):
 		sys.stdout.flush()
 		return None
 	
-def add_balanced_trees(df, col_name='encoded_tree', min_wordcount=50, deviation_ratio_from_mncls=1.5):
+def add_trees_and_make_data_balanced(df, col_name='encoded_tree', min_wordcount=50, deviation_ratio_from_mncls=1.5):
 	if not isinstance(df, pd.core.frame.DataFrame):
 		sys.stdout.write('ERROR: input_ data is {type(input_)}, but the function admits pandas data frame type.')
 		sys.stdout.flush()
@@ -95,26 +96,13 @@ def add_balanced_trees(df, col_name='encoded_tree', min_wordcount=50, deviation_
 	df['trees'] = trees
 	df = df[df['trees'].notnull()]
 	return df
-
-def clean_text(text):
-	res = (text + '!')[:-1]
-	res = res.strip()
-	#for rep_ch in ['\\n', '\\r', '\\t', '\n', '\r', '\t', ')', '(']:
-	#	res = res.replace(rep_ch, ' ')
-	res = res.replace('\'', '')
-	res = re.sub(r'\\x..|\\xdd', '', res)
-	res = re.sub(r'\\s|\\n|\\r|\\t|\n|\r|\t|\)|\(', ' ', res)
-	res = res.replace('\x00','')
-	res = res.encode("ascii", errors="ignore").decode()
-	arr = res.split()
-	return ' '.join(arr)
 	
 def get_text_from_siblings_with_common_parent(node):
 	arr = []
 	for sb in node.next_siblings:
 		if isinstance(sb, NavigableString): continue
 		if sb.parent.name == node.parent.name:
-			txt = str(clean_text(sb.text))
+			txt = str(utils.clean_text(sb.text))
 			arr.append(txt)
 	return ' '.join(arr)	
 		
@@ -126,7 +114,7 @@ def traverse(node, cur_depth, cur_branch, cutoff_text, max_depth):
 	if len(children) == 0 or cur_depth == max_depth:
 		leaf_ret = '('
 		if node is not None:
-			txt = str(clean_text(node.text))
+			txt = str(utils.clean_text(node.text))
 			leaf_ret += txt
 			if cur_branch == used_max_branches - 1:
 				txt = str(get_text_from_siblings_with_common_parent(node))
@@ -155,24 +143,24 @@ def traverse(node, cur_depth, cur_branch, cutoff_text, max_depth):
 	elif not_none_children == 1: return node_ret
 	else: return f'({node_ret})'
 			
-def html_to_encoded_tree(html_content, max_depth=4, label=None):
+def html_to_encoded_tree(html_content, max_depth, label):
 	soup = BeautifulSoup(html_content, 'html.parser')
 	tree_line = traverse(soup, 0, 0, '', max_depth)
 	if tree_line is not None:
 		tree_line = tree_line + f'->{label}\n'
 	return tree_line
 
-def add_encoded_trees_to_dataframe(df):
-	df = df[(df['webpage_text'].notnull() & df['categories'].notnull() & (df['is_eng'] == True))]
-	classes = list(set(df['categories']))
-	df['class'] = df['categories'].apply(lambda x: classes.index(x))
-	df['encoded_tree'] = [html_to_encoded_tree(entry['webpage_text'], max_depth=4, label=entry['class']) for _, entry in tqdm(df.iterrows())]
-	df = add_balanced_trees(df)
+def add_encoded_trees_to_dataframe(df, label_colname='categories', corpus_colname='webpage_text', max_depth=4):
+	df = df[(df[corpus_colname].notnull() & df[label_colname].notnull() & (df['is_eng'] == True))]
+	classes = list(set(df[label_colname]))
+	df['class'] = df[label_colname].apply(lambda x: classes.index(x))
+	df['encoded_tree'] = [html_to_encoded_tree(entry[corpus_colname], max_depth=max_depth, label=entry['class']) for _, entry in tqdm(df.iterrows())]
+	df = add_trees_and_make_data_balanced(df)
 	return df
 
 def test():
 	df_raw = pd.read_csv('/home/vahidsanei_google_com/data/yelp_data/updated_large/business_with_corpus.csv')
-	df = unify_yelp_data_classes(df_raw)
+	df = utils.unify_yelp_data_classes(df_raw)
 	classes = list(set(df['categories']))
 	df['categories'] = df['categories'].apply(lambda x: classes.index(x))
 	for i, entry in tqdm(df.iterrows()):

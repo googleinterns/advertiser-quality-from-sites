@@ -1,4 +1,6 @@
 import sys, os, math, time, itertools, shutil, random
+sys.path.append(os.getcwd() + '/..')
+
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -14,20 +16,22 @@ from bert.loader import StockBertConfig, map_stock_config_to_params, load_stock_
 from bert.tokenization.bert_tokenization import FullTokenizer
 
 import tree_lib
+from utils import utils
 
 class Configuration():
-	def __init__(self, input_df=None, lr=1e-3, n_epochs=20, l2=0.01, test_split_ratio=0.2, val_split_ratio=None, anneal_factor=2, 
+	def __init__(self, input_df_train=None, input_df_test=None, lr=1e-2, n_epochs=40, l2=0.01, val_split_ratio=None, anneal_factor=1.5, 
 			anneal_tolerance=0.98, patience_early_stopping=5, max_depth=None, n_classes=None, bert_folder_path=None, 
-			bert_embedding_size=768, embedding_size=64, max_content_length=40, verbose=1):
-		assert input_df is not None, 'input df cannot be None'
+			bert_embedding_size=768, embedding_size=800, keep_prob=0.65, max_content_length=128, verbose=1):
+		assert input_df_train is not None, 'input_df_train cannot be None'
+		assert input_df_test is not None, 'input_df_train cannot be None'
 		assert n_classes is not None, '# of classes must be specified'
 		assert bert_folder_path is not None, 'input files for BERT must be specified'
 
-		self.input_df = input_df
+		self.input_df_train = input_df_train
+		self.input_df_test = input_df_test
 		self.lr = lr
 		self.n_epochs = n_epochs
 		self.l2 = l2
-		self.test_split_ratio = test_split_ratio
 		self.val_split_ratio = val_split_ratio
 		self.anneal_factor = anneal_factor
 		self.anneal_tolerance = anneal_tolerance
@@ -42,46 +46,39 @@ class Configuration():
 		# the output size of uncased_L-12_H-768_A-12 is 768
 		self.bert_embedding_size = bert_embedding_size
 		self.embedding_size = embedding_size
-		sys.stdout.flush()
+		self.keep_prob = keep_prob
 		self.max_content_length = max_content_length
 		self.verbose = verbose
 
 		# save weights after set value steps, to remove the constructed trees from RAM (to avoid OOM)
 		self.AVOID_OOM_AT = 100
 		self.model_name = None
-		self.weights_path = None
 	
 class RecursiveModel():
-	
-	def __init__(self, configuration):
-		self.configuration = configuration
-		self.__set_model_name_and_path_weights__()				
-		trees = tree_lib.read_trees(self.configuration.input_df, verbose=self.configuration.verbose)
+	def __init__(self, configuration):		
 		
-		random.shuffle(trees)
-		###################################
-		### for testing
-		trees = trees[:1000]
-		###################################
+		self.configuration = configuration
+		self.__set_model_name__()				
+		training_trees = tree_lib.read_trees(self.configuration.input_df_train, verbose=self.configuration.verbose)
+		self.test_trees = tree_lib.read_trees(self.configuration.input_df_test, verbose=self.configuration.verbose)
 			
 		self.bert_model = self.load_bert()
 		if self.configuration.verbose > 0:
 			sys.stdout.write(' [Preprocessing step] Get embeddings of leaves contents:\n')
 			sys.stdout.flush()
-		for tree in (tqdm(trees) if self.configuration.verbose > 0 else trees):
-			self.__content_to_embedding__(tree.root)		
-
+		for tree in (tqdm(training_trees) if self.configuration.verbose > 0 else training_trees):
+			self.__content_to_embedding__(tree.root)	
+					
 		tf.disable_v2_behavior()
-		tf.disable_eager_execution()
+		#tf.disable_eager_execution()
 		
-		split_size = int((1.0 - self.configuration.test_split_ratio) * len(trees))
-		self.train_trees = trees[:split_size]
-		self.test_trees = trees[split_size:]
 		self.val_trees = None
 		if self.configuration.val_split_ratio is not None:
-			split_size = int((1.0 - self.configuration.val_split_ratio) * len(self.train_trees))
-			self.val_trees = self.train_trees[split_size:]
-			self.train_trees = self.train_trees[:split_size]
+			split_size = int((1.0 - self.configuration.val_split_ratio) * len(training_trees))
+			self.val_trees = training_trees[split_size:]
+			self.train_trees = training_trees[:split_size]
+		else:
+			self.train_trees = training_trees[:]
 			
 		if self.configuration.verbose > 0:
 			sys.stdout.write(f' Training data distribution with {len(self.train_trees)} entries\n')
@@ -95,11 +92,15 @@ class RecursiveModel():
 			
 			sys.stdout.write(f' Test data distribution with {len(self.test_trees)} entries\n')
 			sys.stdout.flush()
-			self.__cls_distributions__(self.test_trees)			
+			self.__cls_distributions__(self.test_trees)
+			sys.stdout.write('*' * 100 + '\n')
+			sys.stdout.flush()			
 			
-	def __set_model_name_and_path_weights__(self):
+		self.weights_path = os.path.join('.', 'weights', f'{self.configuration.model_name}.ckpt')
+		self.best_weights_path = os.path.join('.', 'weights', f'best.{self.configuration.model_name}.ckpt')
+		
+	def __set_model_name__(self):
 		self.configuration.model_name = f'{socket.gethostname()}_{self.__class__.__name__}_cls={self.configuration.n_classes}'
-		self.configuration.weights_path = os.path.join('weights', self.configuration.model_name)
 		
 	def __cls_distributions__(self, trees):
 		cls_count = {}
@@ -164,6 +165,7 @@ class RecursiveModel():
 				b = tf.get_variable(f'b{len(node.children)}')
 			node_tensor = tf.nn.relu(tf.add(tf.matmul(children_tensors, W), b))
 			
+		node_tensor = tf.nn.dropout(node_tensor, rate=1.0 - self.configuration.keep_prob)									
 		return node_tensor
 	
 	def _compute_logit(self, tree):
@@ -203,10 +205,7 @@ class RecursiveModel():
 			W = tf.get_variable('W_bert')
 			Ws.append(W)
 			
-		total_weight_loss = tf.Variable(0)
-		for W in Ws:
-			total_weight_loss = tf.add(total_weight_loss, tf.nn.l2_loss(W))
-		
+		total_weight_loss = tf.reduce_sum([tf.nn.l2_loss(W) for W in Ws])
 		total_loss = self.configuration.l2 * total_weight_loss + cross_entropy_loss
 		return total_loss
 	
@@ -232,7 +231,7 @@ class RecursiveModel():
 					tree = trees[pos]
 					logit = self._compute_logit(tree)
 					tf_prediction = tf.argmax(logit, 1)
-					y_pred = sess.run(tf_prediction)
+					y_pred = sess.run(tf_prediction)[0]
 					predictions.append(y_pred)
 					tree_loss = sess.run(self.tree_loss(tree, logit=logit))
 					losses.append(tree_loss)
@@ -246,16 +245,16 @@ class RecursiveModel():
 		random.shuffle(self.train_trees)
 		losses = []
 		pos = 0
-		weights_path = f'weights/{self.configuration.model_name}.temp'
+		if not os.path.exists('./weights'):
+			os.makedirs('./weights')
 		while pos < len(self.train_trees):
 			with tf.Graph().as_default(), tf.Session() as sess:
 				self.get_variables()
-				
 				if epoch_number == 0 and pos == 0:
 					sess.run(tf.global_variables_initializer())
 				else:
 					saver = tf.train.Saver()
-					saver.restore(sess, weights_path)
+					saver.restore(sess, self.weights_path)
 				
 				for i in range(self.configuration.AVOID_OOM_AT):
 					if pos >= len(self.train_trees): break
@@ -267,27 +266,24 @@ class RecursiveModel():
 					losses.append(l)
 					
 					if self.configuration.verbose > 0:
-						sys.stdout.write(f'\r Epoch={epoch_number + 1}, {pos + 1}/{len(self.train_trees)}: loss = {np.mean(losses)}')
+						sys.stdout.write(f'\r Epoch:{epoch_number + 1}/{self.configuration.n_epochs}, {pos + 1}/{len(self.train_trees)}: loss={np.mean(losses)}')
 						sys.stdout.flush()
 					pos += 1
 					
 				saver = tf.train.Saver()
-				if not os.path.exists('./weights'):
-					os.makedirs('./weights')
-				saver.save(sess, weights_path)
+				saver.save(sess, self.weights_path)
 		
 		if self.configuration.verbose > 0:
 			sys.stdout.write('\n')
 			sys.stdout.flush()		
 		
-		train_predictions, train_losses = self.predict(self.train_trees, weights_path=weights_path)
-		val_predictions, val_losses = self.predict(self.val_trees, weights_path=weights_path)
+		train_predictions, train_losses = self.predict(self.train_trees, weights_path=self.weights_path)
+		val_predictions, val_losses = None, None if self.val_trees is None else self.predict(self.val_trees, weights_path=self.weights_path)
 		
 		train_labels = [t.label for t in self.train_trees]
-		val_labels = [t.label for t in self.val_trees]
-		
+		val_labels = None if self.val_trees is None else [t.label for t in self.val_trees]
 		train_accuracies = np.equal(train_labels, train_predictions)
-		val_accuracies = np.equal(val_labels, val_predictions)
+		val_accuracies = None if self.val_trees is None else np.equal(val_labels, val_predictions)
 		
 		return train_accuracies, val_accuracies, train_losses, val_losses
 			
@@ -297,32 +293,47 @@ class RecursiveModel():
 		val_losses = []
 		val_accuracies = []
 		last_epoch_loss = float('inf')
-		best_val_loss = float('inf')
+		best_val_acc = -1
 		best_val_epoch = -1
 		
-		for epoch in range(self.configuration.n_epochs):		
+		for epoch in range(self.configuration.n_epochs):
+			start_time = time.time()		
 			epoch_train_accuracies, epoch_val_accuracies, epoch_train_losses, epoch_val_losses = self.run_epoch(epoch_number=epoch)
-			train_acc, val_acc, train_loss, val_loss = np.mean(epoch_train_accuracies), np.mean(epoch_val_accuracies), np.mean(epoch_train_losses), np.mean(epoch_val_losses)
-			sys.stdout.write(f' Train acc = {round(train_acc * 100, 3)}%, Val acc = {round(val_acc * 100, 3)}%, Train loss = {train_loss}, Val loss = {val_loss}\n')
-			sys.stdout.flush()
+			epoch_time = time.time() - start_time
+			train_acc, train_loss = np.mean(epoch_train_accuracies), np.mean(epoch_train_losses)
+			train_accuracies.append(train_acc)	
+			train_losses.append(train_loss)
 			
-			train_losses.append(np.mean(epoch_train_losses))
-			train_accuracies.append(np.mean(epoch_train_accuracies))
-			val_losses.append(np.mean(epoch_val_losses))
-			val_accuracies.append(np.mean(epoch_val_accuracies))
-			
+			if epoch_val_accuracies is not None:
+				val_acc, val_loss =  np.mean(epoch_val_accuracies), np.mean(epoch_val_losses)
+				val_losses.append(val_loss)
+				val_accuracies.append(val_acc)	
+				sys.stdout.write(f' Train acc = {round(train_acc * 100, 3)}%, Val acc = {round(val_acc * 100, 3)}%, Train loss = {train_loss}, Val loss = {val_loss}, lr={self.configuration.lr}, epoch time={round(epoch_time, 2)}s\n')
+			else:
+				sys.stdout.write(f' Train acc = {round(train_acc * 100, 3)}%, Train loss = {train_loss}, lr={self.configuration.lr}, epoch time={round(epoch_time, 2)}s\n')
+			sys.stdout.write(('*' * 150) + '\n')
+			sys.stdout.flush()		
+
 			if train_losses[-1] > last_epoch_loss * self.configuration.anneal_tolerance:
 				self.configuration.lr /= self.configuration.anneal_factor
-				#sys.out.write(f'\n *** Annealed learning rate to {self.configuration.lr} *** \n')
 			last_epoch_loss = train_losses[-1]
 			
-			if val_losses[-1] < best_val_loss:
-				# TODO: for testing phase, save the current model in best_weights.temp 
-				best_val_loss = val_losses[-1]
-				best_val_epoch = epoch
+			if epoch_val_accuracies is not None and val_acc > best_val_acc:
+					best_val_acc = val_acc
+					best_val_epoch = epoch
+					shutil.copyfile(f'{weights_path}.data-00000-of-00001', f'{best_weights_path}.data-00000-of-00001')
+					shutil.copyfile(f'{weights_path}.index', f'{best_weights_path}.index')
+					shutil.copyfile(f'{weights_path}.meta', f'{best_weights_path}.meta')
 			
 			#if epoch - best_val_epoch > self.configuration.patience_early_stopping:
-			#	break
+			#	TODO: stop training.
+			
+	def evaluate_testset(self):
+		test_predictions, test_losses = model.predict(self.test_trees, self.best_weights_path)
+		test_labels = [t.label for t in self.test_trees]
+		test_acc = np.mean(np.equal(test_labels, test_predictions))
+		sys.stdout.write(f' Test acc = {round(test_acc * 100, 3)}%\n')
+
 
 class RecursiveModelWithLessParams(RecursiveModel):
 	def __init__(self, configuration):
@@ -345,7 +356,8 @@ class RecursiveModelWithLessParams(RecursiveModel):
 				else:
 					children_tensors = tf.concat([node_tensor, self.get_tensor(child)], 1)
 					node_tensor = tf.nn.relu(tf.matmul(children_tensors, W) + b)
-								
+					
+		node_tensor = tf.nn.dropout(node_tensor, rate=1.0 - self.configuration.keep_prob)									
 		return node_tensor
 	
 	# overrided method
@@ -364,11 +376,8 @@ class RecursiveModelWithLessParams(RecursiveModel):
 		with tf.variable_scope('bert_layer', reuse=True):
 			W = tf.get_variable('W_bert')
 			Ws.append(W)
-			
-		total_weight_loss = 0
-		for W in Ws:
-			total_weight_loss += tf.nn.l2_loss(W)
-		
+
+		total_weight_loss = tf.reduce_sum([tf.nn.l2_loss(W) for W in Ws])
 		total_loss = self.configuration.l2 * total_weight_loss + cross_entropy_loss
 		return total_loss
 	
@@ -385,33 +394,102 @@ class RecursiveModelWithLessParams(RecursiveModel):
 		with tf.variable_scope('bert_layer'):
 			tf.get_variable('W_bert', [self.configuration.bert_embedding_size, self.configuration.embedding_size])
 			tf.get_variable('b_bert', [1, self.configuration.embedding_size])
+			
+class RecursiveModelWithParamsForDepths(RecursiveModel):
+	def __init__(self, configuration):
+		super().__init__(configuration)
+	
+	# overrided method
+	def get_tensor(self, node):			
+		if node.is_leaf == True:
+			with tf.variable_scope('bert_layer', reuse=True):
+				W_bert = tf.get_variable('W_bert', trainable=True)
+				b_bert = tf.get_variable('b_bert', trainable=True)
+			node_tensor = tf.nn.relu(tf.matmul(node.bert_embedding, W_bert) + b_bert)
+		else:	
+			with tf.variable_scope(f'layer_depth{node.depth}', reuse=True):
+				W = tf.get_variable(f'W_d{node.depth}', trainable=True)
+				b = tf.get_variable(f'b_d{node.depth}', trainable=True)
+							
+			children_tensors = [self.get_tensor(child) for child in node.children]
+			mean_children_tensors = tf.reduce_mean(children_tensors, axis=0)
+			node_tensor = tf.nn.relu(tf.add(tf.matmul(mean_children_tensors, W), b))
+			
+		node_tensor = tf.nn.dropout(node_tensor, rate=1.0 - self.configuration.keep_prob)									
+		return node_tensor
+	
+	# overrided method
+	def _compute_loss(self, label, logit):
+		cross_entropy_loss = tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logit, labels=tf.constant(label)))
+		
+		Ws = []
+		with tf.variable_scope('output_layer', reuse=True):
+			W = tf.get_variable('W0', trainable=True)
+			Ws.append(W)
+
+		for d in range(0, self.configuration.max_depth):
+			with tf.variable_scope(f'layer_depth{d}', reuse=True):
+				W = tf.get_variable(f'W_d{d}', trainable=True)
+				Ws.append(W)
+			
+		with tf.variable_scope('bert_layer', reuse=True):
+			W = tf.get_variable('W_bert', trainable=True)
+			Ws.append(W)
+
+		total_weight_loss = tf.reduce_sum([tf.nn.l2_loss(W) for W in Ws])
+		total_loss = self.configuration.l2 * total_weight_loss + cross_entropy_loss
+		return total_loss
+	
+	# overrided method
+	def get_variables(self):
+		with tf.variable_scope('output_layer', reuse=False):
+			tf.get_variable('W0', [self.configuration.embedding_size, self.configuration.n_classes], trainable=True)
+			tf.get_variable('b0', [1, self.configuration.n_classes], trainable=True)
+			
+		for d in range(0, self.configuration.max_depth):
+			with tf.variable_scope(f'layer_depth{d}', reuse=False):
+				tf.get_variable(f'W_d{d}', [self.configuration.embedding_size, self.configuration.embedding_size], trainable=True)
+				tf.get_variable(f'b_d{d}', [1, self.configuration.embedding_size], trainable=True)
+
+		with tf.variable_scope('bert_layer', reuse=False):
+			tf.get_variable('W_bert', [self.configuration.bert_embedding_size, self.configuration.embedding_size], trainable=True)
+			tf.get_variable('b_bert', [1, self.configuration.embedding_size], trainable=True)
 
 
-def test_model():
-	bert_folder_path = os.path.join('/home/vahidsanei_google_com/', 'data','uncased_L-12_H-768_A-12')
-	df = pd.read_csv('/home/vahidsanei_google_com/data/yelp_data/trees/df_with_trees.csv')
-	#df = df[:50]
-	configuration = Configuration(input_df=df, max_depth=4, val_split_ratio=0.1, test_split_ratio=0.001, n_classes=10, bert_folder_path=bert_folder_path) 
+def test_model(bert_folder_path, split_ratio=0.8):
+	input_df_train, input_df_test = utils.get_train_test(input_df_address, split_size_ratio)
+	configuration = Configuration(input_df_train, input_df_test, max_depth=4, val_split_ratio=val_split_ratio, n_classes=10, bert_folder_path=bert_folder_path) 
+	
 	model = RecursiveModel(configuration)
-	
 	start_time = time.time()
 	model.train_model()
+	
 	print(f' Elapsed time (training) = {time.time() - start_time}')
+	model.evaluate_testset()
 	
-def test_model2():
-	bert_folder_path = os.path.join('/home/vahidsanei_google_com/', 'data','uncased_L-12_H-768_A-12')
-	df = pd.read_csv('/home/vahidsanei_google_com/data/yelp_data/trees/df_with_trees.csv')
-	#df = df[:50]
-	configuration = Configuration(input_df=df, val_split_ratio=0.1, test_split_ratio=0.001, n_classes=10, bert_folder_path=bert_folder_path) 
-	model = RecursiveModelWithLessParams(configuration)	
-
+def test_model2(input_df_address, bert_folder_path, split_size_ratio=0.8, val_split_ratio=0.1):
+	input_df_train, input_df_test = utils.get_train_test(input_df_address, split_size_ratio)
+	configuration = Configuration(input_df_train, input_df_test, val_split_ratio=val_split_ratio, n_classes=10, bert_folder_path=bert_folder_path) 
+	
+	model = RecursiveModelWithLessParams(configuration)
 	start_time = time.time()
 	model.train_model()
+	
 	print(f'Training time = {time.time() - start_time}')
+	model.evaluate_testset()
+	
+def test_model3(input_df_address, bert_folder_path, split_size_ratio=0.8, val_split_ratio=0.1):
+	input_df_train, input_df_test = utils.get_train_test(input_df_address, split_size_ratio)
+	configuration = Configuration(input_df_train, input_df_test, max_depth=4, val_split_ratio=val_split_ratio, n_classes=10, bert_folder_path=bert_folder_path) 
+	
+	model = RecursiveModelWithParamsForDepths(configuration)	
+	start_time = time.time()
+	model.train_model()
+	
+	print(f'Training time = {time.time() - start_time}')
+	model.evaluate_testset()
 			
 if __name__ == '__main__':
-	test_model()
-	
-#shutil.copyfile('./weights/%s.temp.data-00000-of-00001'%self.configuration.model_name, './weights/%s.data-00000-of-00001'%self.configuration.model_name)
-#shutil.copyfile('./weights/%s.temp.index'%self.configuration.model_name, './weights/%s.index'%self.configuration.model_name)
-#shutil.copyfile('./weights/%s.temp.meta'%self.configuration.model_name, './weights/%s.meta'%self.configuration.model_name)
+	bert_folder_path=os.path.join('/home/vahidsanei_google_com/', 'data','uncased_L-12_H-768_A-12')
+	input_df_address = '/home/vahidsanei_google_com/data/yelp_data/category/df_with_trees_v0.csv'
+	test_model3(input_df_address, bert_folder_path, split_size_ratio=0.2)
