@@ -1,2 +1,0 @@
-model_checkpoint_path: "recnn_l2=0.02_lr=0.01_depth=4_cls=10.temp"
-all_model_checkpoint_paths: "recnn_l2=0.02_lr=0.01_depth=4_cls=10.temp"
