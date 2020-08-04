@@ -41,7 +41,6 @@ class Tree:
 				segments.append((beg_pos, pos))
 				beg_pos = pos + 1
 		
-		node.children = []
 		for beg, end in segments:
 			child = self.tree_constructor(encoded_tree[beg: end + 1], depth=depth + 1, parent=node)
 			node.children.append(child)
@@ -55,7 +54,7 @@ class Node:
 		self.depth = None
 		self.content = None
 		self.parent = None
-		self.children = None
+		self.children = []
 		self.is_leaf = False
 			
 def read_trees(df, col_name='encoded_tree', verbose=1):
