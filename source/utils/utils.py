@@ -4,17 +4,22 @@ sys.path.append(os.getcwd() + '/..')
 import numpy as np
 import pandas as pd
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 class style():
-    BLACK = '\033[30m'
-    RED = '\033[31m'
-    GREEN = '\033[32m'
-    YELLOW = '\033[33m'
-    BLUE = '\033[34m'
-    MAGENTA = '\033[35m'
-    CYAN = '\033[36m'
-    WHITE = '\033[37m'
-    UNDERLINE = '\033[4m'
-    RESET = '\033[0m'
+	PURPLE = '\033[95m'
+	BLACK = '\033[30m'
+	RED = '\033[31m'
+	GREEN = '\033[32m'
+	YELLOW = '\033[33m'
+	BLUE = '\033[34m'
+	MAGENTA = '\033[35m'
+	CYAN = '\033[36m'
+	WHITE = '\033[37m'
+	UNDERLINE = '\033[4m'
+	BOLD = '\033[1m'
+	RESET = '\033[0m'
 
 def unify_yelp_data_classes(df, map_classes = {
                 'Restaurants': 'Food', 'Food': 'Food', 'Frozen Yogurt': 'Food', 'Pizza': 'Food', 'Bars': 'Food', 'Coffee': 'Food',
@@ -35,7 +40,6 @@ def unify_yelp_data_classes(df, map_classes = {
                 
                 'Entertainment': 'Entertainment', 
                 'Active Life': 'Entertainment', 'Nightlife': 'Entertainment',
-                #'Hotels': 'Entertainment', 'Travel': 'Entertainment', 
                 'Hobby Shops': 'Entertainment', 
 
                 'Fitness': 'Fitness', 'Sporting Goods': 'Fitness', 'Gyms': 'Fitness', 'Sports Bars': 'Fitness', 'Golf': 'Fitness',
@@ -77,7 +81,7 @@ def unify_yelp_data_classes(df, map_classes = {
 		show_skipped_classes(df, map_classes)
 	return df
 	
-def remove_not_loaded_websites(df, bad_keywords = {'javascript' }, col_name='webpage_corpus', min_wordcount=50):
+def remove_not_loaded_websites(df, col_name='webpage_corpus', bad_keywords = {'javascript', 'error'}, min_wordcount=50):
 	df = df[df[col_name].notnull()]
 	for bad_keyword in bad_keywords:
 		df[col_name] = df[col_name].apply(lambda x: None if bad_keyword.lower() in x.lower() else x)
@@ -86,8 +90,24 @@ def remove_not_loaded_websites(df, bad_keywords = {'javascript' }, col_name='web
 	df = df[df[col_name].notnull()]
 	return df
 	
+def oversampling(df, col_name='categories', limit=-1):
+	print(f'Max count = {df[col_name].value_counts().max()} Min Count = {df[col_name].value_counts().min()}')
+	if limit == -1: 
+		limit = df[col_name].value_counts().max()
+		l = [df]
+	else:
+		l = []
+		for _, group in df.groupby(col_name):
+			l.append(group[:limit])		
+	for _, group in df.groupby(col_name):
+		if len(group) < limit:
+			l.append((group.sample(limit - len(group), replace=True)))
+	oversampled_df = pd.concat(l)
+	oversampled_df = oversampled_df.sample(frac=1).reset_index(drop=True)
+	return oversampled_df
+	
 def show_skipped_classes(df, map_classes, col_name='categories'):
-	#This function is to check which entires are removed due to not belonging to any defined classes
+	#This function is to log which entires are removed due to not belonging to any defined classes
 	cat = {}
 	bad = []
 	for x in df[col_name]:
@@ -128,6 +148,12 @@ def plot_classes_distribution(df, col_name='categories'):
     for rect, label in zip(rects, labels):
         ax.text(rect.get_x() + rect.get_width() * 0.5, rect.get_height() + 10, label, ha='center', va='bottom', fontsize=14)
 
+def clean_corpus(df, col_name='webpage_corpus'):
+	df = df[(df[col_name].notnull() & (df['is_eng'] == True))]
+	df = df[df[col_name].notnull()]
+	df[col_name] = df[col_name].apply(lambda x: clean_text(x))
+	return df
+
 def clean_text(text):
 	res = (text + '!')[:-1]
 	res = res.strip()
@@ -139,8 +165,7 @@ def clean_text(text):
 	arr = res.split()
 	return ' '.join(arr)
 	
-def get_train_test(input_df_address, split_size_ratio):
-	df = pd.read_csv(input_df_address)
+def get_train_test(df, split_size_ratio):
 	split_size = int(split_size_ratio * len(df))
 	input_df_train = df[:split_size]
 	input_df_test = df[split_size:]

@@ -16,7 +16,7 @@ class Tree:
 		else:
 			idx = encoded_tree.rfind('->')
 			label_part = encoded_tree[idx + 2:]
-			self.label = int(''.join(filter(type(label_part).isdigit, label_part)))
+			self.label = float(label_part)
 			encoded_tree = encoded_tree[:idx]
 			self.root = self.tree_constructor(encoded_tree)
 	
@@ -56,6 +56,19 @@ class Node:
 		self.parent = None
 		self.children = []
 		self.is_leaf = False
+		
+def median_wordcounts(encoded_tree):
+	def word_leaf_counts(node):
+		if node.is_leaf == True:
+			return node.wordcount, 1
+		wordcount, leaves = 0, 0
+		for child in node.children:
+			wc, nl = word_leaf_counts(child)
+			wordcount += wc
+			leaves += nl
+		return wordcount, leaves
+	tree = Tree(encoded_tree)
+	return word_leaf_counts(tree.root)
 			
 def read_trees(df, col_name='encoded_tree', verbose=1):
 	if isinstance(df, pd.core.frame.DataFrame):
@@ -69,7 +82,7 @@ def read_trees(df, col_name='encoded_tree', verbose=1):
 		sys.stdout.flush()
 		return None
 	
-def add_trees_and_make_data_balanced(df, col_name='encoded_tree', min_wordcount=50, deviation_ratio_from_mncls=1.5):
+def make_data_balanced(df, col_name='encoded_tree', min_wordcount=50, deviation_ratio_from_mncls=1.5):
 	if not isinstance(df, pd.core.frame.DataFrame):
 		sys.stdout.write('ERROR: input_ data is {type(input_)}, but the function admits pandas data frame type.')
 		sys.stdout.flush()
@@ -94,6 +107,7 @@ def add_trees_and_make_data_balanced(df, col_name='encoded_tree', min_wordcount=
 		
 	df['trees'] = trees
 	df = df[df['trees'].notnull()]
+	df = df.drop(['trees'])
 	return df
 	
 def get_text_from_siblings_with_common_parent(node):
@@ -141,6 +155,15 @@ def traverse(node, cur_depth, cur_branch, cutoff_text, max_depth):
 	if not_none_children == 0: return None
 	elif not_none_children == 1: return node_ret
 	else: return f'({node_ret})'
+	
+def get_depth_branches(node):
+	children = [child for child in node.children if isinstance(child, Tag)]
+	max_depth, max_branches = 0, len(children)
+	for i, child in enumerate(children):
+		d, b = get_depth_branches(child)
+		max_depth = max(max_depth, d + 1)
+		max_branches = max(max_branches, b)
+	return max_depth, max_branches
 			
 def html_to_encoded_tree(html_content, max_depth, label):
 	soup = BeautifulSoup(html_content, 'html.parser')
@@ -149,12 +172,21 @@ def html_to_encoded_tree(html_content, max_depth, label):
 		tree_line = tree_line + f'->{label}\n'
 	return tree_line
 
-def add_encoded_trees_to_dataframe(df, label_colname='categories', corpus_colname='webpage_text', max_depth=4):
-	df = df[(df[corpus_colname].notnull() & df[label_colname].notnull() & (df['is_eng'] == True))]
-	classes = list(set(df[label_colname]))
-	df['class'] = df[label_colname].apply(lambda x: classes.index(x))
+def get_html_depth_branches(html_content):
+	soup = BeautifulSoup(html_content, 'html.parser')
+	d, b = get_depth_branches(soup)
+	return d, b
+
+def add_encoded_trees_to_dataframe(df, label_colname='categories', corpus_colname='webpage_text', max_depth=4, is_multicase=True):
+	df = df[(df[label_colname].notnull() & df[corpus_colname].notnull())]
+	classes = sorted(list(set(df[label_colname])))
+	print(classes)
+	# convert labels to numbers (indices)
+	if is_multicase == True:
+		df['class'] = df[label_colname].apply(lambda x: classes.index(x))
+	else:
+		df['class'] = df[label_colname]
 	df['encoded_tree'] = [html_to_encoded_tree(entry[corpus_colname], max_depth=max_depth, label=entry['class']) for _, entry in tqdm(df.iterrows())]
-	df = add_trees_and_make_data_balanced(df)
 	return df
 
 def test():
@@ -165,10 +197,4 @@ def test():
 	for i, entry in tqdm(df.iterrows()):
 		html = entry['webpage_text'] + '!'
 		html = html[:-1]
-		html_to_tree(html_content=html, label=entry['categories'], output_path_dir='/home/vahidsanei_google_com/data/yelp_data/trees/', is_new=True if i == 0 else False)		
-			
-if __name__ == '__main__':
-	tree_path = '/home/vahidsanei_google_com/data/yelp_data/trees/tree.txt'
-	#tree_path = '/home/vahidsanei_google_com/advertiser-quality-from-sites/source/recursive_model/trees/tree.txt'
-	trees = read_trees(tree_path)
-	balance_data(tree_path)
+		html_to_tree(html_content=html, label=entry['categories'], output_path_dir='/home/vahidsanei_google_com/data/yelp_data/trees/', is_new=True if i == 0 else False)
