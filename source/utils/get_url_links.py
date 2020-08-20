@@ -1,4 +1,3 @@
-
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 HOME_PATH = '/home/vahidsanei_google_com/'
@@ -26,20 +25,10 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 
-
 def get_urls(path):
 	file = open(path, 'r')
 	urls = [line.strip() for line in file.readlines()]
 	return urls
-
-
-#   with open(path, 'r') as file:
-#     s = file.read()
-#   s = re.sub('[\[\]\']', ' ', s)
-#   urls = s.split(',')
-# some found urls (not many! a few of them) are digits! Recheck yelp.com html file to resolve the issues.
-# urls = [None if (url.strip() == 'None' or url.strip()[0].isdigit()) else url.strip() for url in urls]
-#  return urls
 
 def get_yelp_data(path):
 	with open(path, 'r') as file:
@@ -57,39 +46,14 @@ def save_content_of_websites():
 
 	urls = get_urls(os.path.join(HOME_PATH, 'data/yelp_data', 'link_list.txt'))
 
-	#with open(os.path.join(HOME_PATH, 'data/yelp_data', 'test.txt'), 'w') as f:
-		#for url in urls:
-			#if url is None:
-				#f.write('None')
-			#else:
-				#f.write(url + '')
-				#f.write('\n')
-
 	print('size of url list = {}'.format(len(urls)))
 	urls = [np.nan if url == 'None' or url.isdigit() else url for url in urls]
 	urls = urls + list(np.nan for _ in range(n - len(urls)))
 
 	df['url'] = urls
 	df = df[pd.notnull(df['url'])]
-
-#   options = Options()
-#   options.add_argument('--headless')
-#   driver = webdriver.Chrome(PATH_DRIVER, options=options)
-#   driver.set_page_load_timeout(5)
-#   driver.implicitly_wait(5)
-#   webpage_content = []
-#   for url in tqdm(df['url']):
-#         try:
-#             driver.get(url)
-#             html = driver.page_source
-#             webpage_content.append(html)
-#         except:
-#             webpage_content.append(np.nan)
-#         #print(webpage_content[-1])
-
 	webpage_content = []
 	c, not_found = 0, 0
-	#session = HTMLSession()
 	
 	for url in tqdm(df['url']):
 		webpage_content.append(None)
@@ -100,20 +64,7 @@ def save_content_of_websites():
 			page = requests.get(url, stream=True, timeout=5.0)
 			page.encoding = 'utf-8'
 			webpage_content[-1] = page.content
-			
-			#r = session.get(url, stream=True, timeout=6.0)
-			#r.html.render()
-			#webpage_content[-1] = r.html.text
-			#print(webpage_content[-1])
-			
 		except Exception as e:
-
-			# print(webpage_content[-1])
-			# not_found += 1
-			# frac = not_found / (c + 1.0)
-			# print(frac)
-
-			#print(e)
 			c += 1
 			
 	print (len(webpage_content), c)
@@ -122,10 +73,6 @@ def save_content_of_websites():
 	webpage_content = webpage_content + list(np.nan for _ in range(n - len(webpage_content)))
 	df['webpage_text'] = webpage_content
 	df = df[pd.notnull(df['webpage_text'])]
-
-	# dt = str(datetime.datetime.now())
-	# dt = dt[:dt.find('.')].replace(' ', '_').replace(':','-')i
-	# file_name = 'business_{}.csv'.format(dt)
 
 	file_name = 'business.csv'
 
