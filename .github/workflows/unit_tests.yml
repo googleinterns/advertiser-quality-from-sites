@@ -14,5 +14,5 @@ jobs:
           sudo pip install -r requirements.txt
     - name: Run pytest
       run: |
-          sudo python setup.py install
-          pytest
+          sudo python setup.py develop
+          sudo pytest
