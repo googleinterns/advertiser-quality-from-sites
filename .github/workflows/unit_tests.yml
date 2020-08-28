@@ -8,7 +8,7 @@ jobs:
     - uses: actions/checkout@master
     - name: GitHub Action for pytest
       run: |
-          python3 -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python setup.py develop
+          sudo python3 -m pip install --upgrade pip
+          sudo pip install -r requirements.txt
+          sudo python setup.py develop
           pytest
