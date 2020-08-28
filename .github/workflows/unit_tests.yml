@@ -12,6 +12,7 @@ jobs:
           sudo apt-get install -y python3-setuptools
           sudo python3 -m pip install --upgrade setuptools
           sudo pip install -r requirements.txt
+    - uses: actions/checkout@master
     - name: Run pytest
       with:
-        args: python setup.py develop && pytest
+          args: python setup.py develop && pytest
