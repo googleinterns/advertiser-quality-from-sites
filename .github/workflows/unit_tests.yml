@@ -9,6 +9,7 @@ jobs:
     - name: GitHub Action for pytest
       run: |
           sudo python3 -m pip install --upgrade pip
+          sudo apt-get install -y python-setuptools
           sudo pip install -r requirements.txt
           sudo python setup.py develop
           pytest
