@@ -20,7 +20,7 @@ from tqdm import tqdm
 from bs4 import BeautifulSoup
 from bs4.element import Comment, Tag, NavigableString
 
-from utils import utils
+from source.utils import utils
 
 class Tree:
 	def __init__(self, encoded_tree):

@@ -15,7 +15,7 @@
 import sys, os
 sys.path.append(os.getcwd() + '/..')
 
-import utils
+import source.utils
 
 import argparse
 import requests

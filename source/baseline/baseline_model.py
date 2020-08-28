@@ -38,7 +38,7 @@ from bert.tokenization.bert_tokenization import FullTokenizer
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-from utils import utils
+from source.utils import utils
 
 CHECKPOINT_PATH = './baseline_best_weights/'
 CHROME_PATH = '/home/vahidsanei_google_com/chromedriver/chromedriver'

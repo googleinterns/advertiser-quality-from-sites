@@ -37,8 +37,8 @@ from bert.loader import StockBertConfig, map_stock_config_to_params, load_stock_
 from bert.tokenization.bert_tokenization import FullTokenizer
 
 from recursive_model import tree_lib
-from utils import utils
-from utils.utils import overrides
+from source.utils import utils
+from source.utils.utils import overrides
 
 CHROME_PATH = '/home/vahidsanei_google_com/chromedriver/chromedriver'
 

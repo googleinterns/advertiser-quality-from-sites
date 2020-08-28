@@ -27,7 +27,7 @@ from tqdm import tqdm
 import nltk
 from nltk import tokenize
 
-import utils
+import source.utils
 
 def visible_tags(item):
     return not item.parent.name in {'meta', 'head', 'script', 'style', '[document]'} and not isinstance(item, Comment)
