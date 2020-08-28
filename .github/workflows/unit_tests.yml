@@ -6,10 +6,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@master
-    - name: GitHub Action for pytest
+    - name: Install packages
       run: |
           sudo python3 -m pip install --upgrade pip
           sudo apt-get install -y python3-setuptools
           sudo python3 -m pip install --upgrade setuptools
           sudo pip install -r requirements.txt
+    - name: Run pytest
           sudo python setup.py develop
