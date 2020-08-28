@@ -1,0 +1,15 @@
+on: push
+name: on push
+jobs:
+  gitHubActionForPytest:
+    name: GitHub Action for pytest
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@master
+    - name: GitHub Action for pytest
+      run: |
+          sudo python3 -m pip install --upgrade pip
+          sudo apt-get install -y python3-setuptools
+          sudo pip install -r requirements.txt
+          sudo python setup.py develop
+          pytest
