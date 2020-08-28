@@ -1,3 +1,17 @@
+# Copyright 2020 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import sys, os, re
 sys.path.append(os.getcwd() + '/..')
 
@@ -10,9 +24,20 @@ from utils import utils
 
 class Tree:
 	def __init__(self, encoded_tree):
+		"""		
+				Convert a tree string to be maintained in Tree data 
+				structure whose nodes maintain depth, parent id, and 
+				the tree itself maintains the root node and the label of 
+				tree string.
+				Args:
+				  encoded_tree: a tree string which resembles the DOM
+				  structure of website such that the label is appended to
+				  the end of the string.
+		"""		
 		if encoded_tree is None:
 			self.label = None
-			self.root = Node() # word count will be zero
+			# word count is initialized as zero.
+			self.root = Node() 
 		else:
 			idx = encoded_tree.rfind('->')
 			label_part = encoded_tree[idx + 2:]
@@ -21,11 +46,19 @@ class Tree:
 			self.root = self.tree_constructor(encoded_tree)
 	
 	def tree_constructor(self, encoded_tree, depth=0, parent=None):
+		"""		
+				A recursive function to part the tree string and convert
+				it to data structure Tree.
+		"""
+		# the first character of encoded_tree should be '(' 
+		# and last one should be ')'
 		encoded_tree = encoded_tree[1:-1]
 		node = Node()
 		node.depth = depth
 		node.parent = parent
 		
+		# in this case, the text is not wrapped up with parantheses 
+		# so, we reached to a leaf
 		if '(' not in encoded_tree:
 			node.content = encoded_tree
 			node.wordcount = len(encoded_tree.split())
@@ -57,7 +90,11 @@ class Node:
 		self.children = []
 		self.is_leaf = False
 		
-def median_wordcounts(encoded_tree):
+def wordcounts_stat(encoded_tree):
+	"""		
+			Computes the number of leaves and number of words in the 
+			tree string
+	"""
 	def word_leaf_counts(node):
 		if node.is_leaf == True:
 			return node.wordcount, 1
@@ -71,6 +108,9 @@ def median_wordcounts(encoded_tree):
 	return word_leaf_counts(tree.root)
 			
 def read_trees(df, col_name='encoded_tree', verbose=1):
+	"""		
+			Converts the tree strings to data structure Tree
+	"""
 	if isinstance(df, pd.core.frame.DataFrame):
 		if verbose > 0:
 			sys.stdout.write('Reading trees:\n')
@@ -120,6 +160,16 @@ def get_text_from_siblings_with_common_parent(node):
 	return ' '.join(arr)	
 		
 def traverse(node, cur_depth, cur_branch, cutoff_text, max_depth):
+	"""
+			Convert an HTML content to a tree string, such that parantheses
+			are the internal nodes in the tree, and texts are saved as the leaf
+			of the tree.
+			Args:
+				max_depth: Used to prune the HTML to generate tree strings 
+				with limited depths or branches. Texts of Nodes in HTML 
+				with higher depths are concantenated and appended to their
+				ancestor node whose depth is not larger than max_depth. 
+	"""
 	used_max_branches = cur_depth + 1
 	children = [child for child in node.children if isinstance(child, Tag)]
 	children = children[:used_max_branches]
@@ -157,6 +207,9 @@ def traverse(node, cur_depth, cur_branch, cutoff_text, max_depth):
 	else: return f'({node_ret})'
 	
 def get_depth_branches(node):
+	"""
+			Finds the depth and the maximum number of branches in a tree.
+	"""
 	children = [child for child in node.children if isinstance(child, Tag)]
 	max_depth, max_branches = 0, len(children)
 	for i, child in enumerate(children):

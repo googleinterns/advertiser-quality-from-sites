@@ -1,3 +1,17 @@
+# Copyright 2020 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import sys, os, math, datetime, functools, re
 sys.path.append(os.getcwd() + '/..')
 
@@ -6,6 +20,33 @@ import pandas as pd
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+
+from contextlib import contextmanager
+@contextmanager
+def suppress_stdout():
+    with open(os.devnull, "w") as devnull:
+        old_stdout = sys.stdout
+        sys.stdout = devnull
+        try:  
+            yield
+        finally:
+            sys.stdout = old_stdout       
+@contextmanager
+def suppress_sterr():
+    with open(os.devnull, "w") as devnull:
+        old_stderr = sys.stderr
+        sys.stderr = devnull
+        try:  
+            yield
+        finally:
+            sys.stderr = old_stderr
+
+def overrides(interface_class):
+    def overrider(func):
+        assert (func.__name__ in dir(interface_class)) is True
+        return func
+    return overrider
 
 class style():
 	PURPLE = '\033[95m'
@@ -53,14 +94,16 @@ def unify_yelp_data_classes(df, map_classes = {
                 #'Mass Media': 'Entertainment',
                 #'Churches': 'Religious', 'Religious': 'Religious', 'Religious Organizations': 'Religious'
         }
-    , col_name='categories', show_skipped=False):
+    , col_name='categories'):
+	"""		
+			Convert a list of words from Yelp dataset to a single label name
+			Args:
+				map_classes: A mannually created dictionary to map names to a label name
+			Returns: A dataframe which has a label name instead of list of category names.
+	"""	
 		
 	df = df[df[col_name].notnull()]
 	df[col_name] = df[col_name].apply(lambda x: re.split('[,;&]', x))
-	
-	if show_skipped == True:
-		show_skipped_classes(df, map_classes)
-		return df
 		
 	cat = []
 	for arr in df[col_name]:
@@ -73,8 +116,11 @@ def unify_yelp_data_classes(df, map_classes = {
 			y_str = map_classes[cls].lower()
 			if y_str not in majority_vote: majority_vote[y_str] = 0
 			else: majority_vote[y_str] += 1
+		# choose a label name among the mapped words to label names 
+		# using majority voting
 		if len(majority_vote) != 0:
 			cat[-1] = max(majority_vote, key=lambda k: majority_vote.get(k))
+			
 	df[col_name] = cat
 	df = df[df[col_name].notnull()]
 	if show_skipped == True:
@@ -82,6 +128,10 @@ def unify_yelp_data_classes(df, map_classes = {
 	return df
 	
 def remove_not_loaded_websites(df, col_name='webpage_corpus', bad_keywords = {'javascript', 'error'}, min_wordcount=50):
+	"""		
+			Remove data whose HTML contents have less than min_wordcount 
+			words or has any of the words in bad_keywords
+	"""
 	df = df[df[col_name].notnull()]
 	for bad_keyword in bad_keywords:
 		df[col_name] = df[col_name].apply(lambda x: None if bad_keyword.lower() in x.lower() else x)
@@ -92,6 +142,8 @@ def remove_not_loaded_websites(df, col_name='webpage_corpus', bad_keywords = {'j
 	
 def oversampling(df, col_name='categories', limit=-1):
 	print(f'Max count = {df[col_name].value_counts().max()} Min Count = {df[col_name].value_counts().min()}')
+	# if limit is not -1, the size of each class cannot be 
+	# larger than limit
 	if limit == -1: 
 		limit = df[col_name].value_counts().max()
 		l = [df]
@@ -107,7 +159,10 @@ def oversampling(df, col_name='categories', limit=-1):
 	return oversampled_df
 	
 def show_skipped_classes(df, map_classes, col_name='categories'):
-	#This function is to log which entires are removed due to not belonging to any defined classes
+	''' 
+			This function is to log which entires are removed due 
+			to not belonging to any defined classes
+	'''
 	cat = {}
 	bad = []
 	for x in df[col_name]:

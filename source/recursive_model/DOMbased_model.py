@@ -1,3 +1,17 @@
+# Copyright 2020 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import sys, os, math, time, itertools, shutil, random
 from selenium import webdriver
 import argparse
@@ -24,39 +38,14 @@ from bert.tokenization.bert_tokenization import FullTokenizer
 
 from recursive_model import tree_lib
 from utils import utils
-
-from contextlib import contextmanager
-@contextmanager
-def suppress_stdout():
-    with open(os.devnull, "w") as devnull:
-        old_stdout = sys.stdout
-        sys.stdout = devnull
-        try:  
-            yield
-        finally:
-            sys.stdout = old_stdout       
-@contextmanager
-def suppress_sterr():
-    with open(os.devnull, "w") as devnull:
-        old_stderr = sys.stderr
-        sys.stderr = devnull
-        try:  
-            yield
-        finally:
-            sys.stderr = old_stderr
+from utils.utils import overrides
 
 CHROME_PATH = '/home/vahidsanei_google_com/chromedriver/chromedriver'
-
-def overrides(interface_class):
-    def overrider(func):
-        assert (func.__name__ in dir(interface_class)) is True
-        return func
-    return overrider
 
 class Configuration():
 	def __init__(self, input_df_train=None, input_df_test=None, lr=1e-2, adam_lr=1e-5, n_epochs=20, l2=0.0001, val_split_ratio=None, anneal_factor=1.5, 
 			anneal_tolerance=0.99, patience_early_stopping=5, max_depth=4, n_classes=None, bert_folder_path=None, 
-			bert_embedding_size=768, embedding_size=768, keep_prob=0.6, max_content_length=128, is_multicase=True, verbose=1, url_link=None):
+			bert_embedding_size=768, embedding_size=768, keep_prob=0.6, max_content_length=128, is_multicase=True, verbose=1, url_link=None, chrome_path=CHROME_PATH):
 		assert bert_folder_path is not None, 'input files for BERT must be specified'
 
 		self.input_df_train = input_df_train
@@ -88,14 +77,22 @@ class Configuration():
 		# save weights after set value steps, to remove the constructed trees from RAM (to avoid OOM)
 		self.AVOID_OOM_AT = 100
 		self.model_name = None
+		self.chrome_path = chrome_path
 	
 class DOMBasedModel():
 	def __init__(self, configuration):	
+		"""		
+				Setting up a DOM-based Model and convert HTML contents to Tree strings.
+				Args:
+				  configuration: Set up a model based on the hyperparameters of Configuration
+		"""
 		self.configuration = configuration
 		self.__set_model_name__()
 		
 		self.bert_model = self.load_bert()
 			
+		# if the url_link is not given train the model
+		# otherwise predict the rating (or category) of the given url link
 		if self.configuration.url_link is None:	
 			self.train_trees = tree_lib.read_trees(self.configuration.input_df_train, verbose=self.configuration.verbose)
 			self.test_trees = tree_lib.read_trees(self.configuration.input_df_test, verbose=self.configuration.verbose)
@@ -133,21 +130,27 @@ class DOMBasedModel():
 			
 			self.weights_path = os.path.join('.', 'weights', f'{self.configuration.model_name}.ckpt')
 			self.best_weights_path = os.path.join('.', 'weights', f'best.{self.configuration.model_name}.ckpt')
-		else:			
-			browser = webdriver.Chrome(executable_path=CHROME_PATH)
+		else:
+			browser = webdriver.Chrome(executable_path=self.configuration.chrome_path)
 			browser.get(self.configuration.url_link)
+			# get the HTML conent of the given url link 
+			# and convert it to a tree string			
 			html_content = browser.page_source
 			tree_string = tree_lib.html_to_encoded_tree(html_content, max_depth=4, label=-1)
 			self.url_tree = tree_lib.Tree(tree_string)
 			self.__content_to_embedding__(self.url_tree.root)
 			
-		#tf.disable_v2_behavior()
 		tf.disable_eager_execution()
 	
 	def __set_model_name__(self):
 		self.configuration.model_name = f'{socket.gethostname()}_{self.__class__.__name__}_cls={self.configuration.n_classes}'
 		
 	def __cls_distributions__(self, trees):
+		"""		
+				A helper function to show the distribution of classes in the input.
+				Args:
+				  trees: tree strings that resembles the HTML contents
+		"""
 		cls_count = {}
 		for tree in trees:
 			if tree.label not in cls_count: cls_count[tree.label] = 1
@@ -160,6 +163,9 @@ class DOMBasedModel():
 		sys.stdout.flush()
 		
 	def __content_to_embedding__(self, node):
+		"""		
+				A recursive function to convert the texts of leaves of the tree to embedding using BERT 
+		"""
 		if node.is_leaf == True:
 			self.bert_model.run_eagerly=True
 			node.bert_embedding = np.asarray(self.bert_model.predict(np.expand_dims(self.__cut_with_padding__(node.content), 0)))
@@ -180,9 +186,11 @@ class DOMBasedModel():
 		truth = np.asarray(truth)		
 		if self.configuration.is_multicase == True:
 			prediction = prediction.astype(int)
-			return np.mean(np.equal(prediction, truth)) # acc
+			# computes top 1 acc
+			return np.mean(np.equal(prediction, truth))
 		else:
-			return np.sqrt((np.square(np.subtract(prediction, truth))).mean(axis=0)), np.median(np.abs(np.subtract(prediction, truth))) # rmse, mae
+			# computes rmse, mae respectively
+			return np.sqrt((np.square(np.subtract(prediction, truth))).mean(axis=0)), np.median(np.abs(np.subtract(prediction, truth)))
 	
 	def load_bert(self):
 		try:
@@ -203,7 +211,11 @@ class DOMBasedModel():
 		load_stock_weights(bert, self.configuration.bert_ckpt_file)
 		return model
 		
-	def get_tensor(self, node):			
+	def get_tensor(self, node):	
+		"""		
+				Recursively creates a computational graph based on the structure of DOM HTML
+				returns: a tensorflow embedding of a node in DOM
+		"""				
 		if node.is_leaf == True:
 			with tf.variable_scope('bert_layer', reuse=True):
 				W_bert = tf.get_variable('W_bert')
@@ -232,6 +244,9 @@ class DOMBasedModel():
 		return logit
 		
 	def get_variables(self):
+		"""		
+				Define the trainable parameters including weights and biases
+		"""
 		with tf.variable_scope('output_layer'):
 			tf.get_variable('W0', [self.configuration.embedding_size, self.configuration.n_classes])
 			tf.get_variable('b0', [1, self.configuration.n_classes])
@@ -280,6 +295,7 @@ class DOMBasedModel():
 				self.get_variables()
 				saver = tf.train.Saver()
 				saver.restore(sess, weights_path)
+				# To avoid OOM, we break the loop so we can save the model and restore it back.
 				for _ in range(self.configuration.AVOID_OOM_AT):
 					if pos >= len(trees): break
 					
@@ -311,6 +327,7 @@ class DOMBasedModel():
 					saver = tf.train.Saver()
 					saver.restore(sess, self.weights_path)
 				
+				# To avoid OOM, we break the loop so we can save the model and restore it back.
 				for i in range(self.configuration.AVOID_OOM_AT):
 					if pos >= len(self.train_trees): break
 		
@@ -383,7 +400,7 @@ class DOMBasedModel():
 			sys.stdout.write(('*' * 150) + '\n')
 			sys.stdout.flush()		
 
-			# Used when only gradient descent is applied.
+			# lr is a learning rate and is used only for non-fast DOM Based Models.
 			if train_losses[-1] > last_epoch_loss * self.configuration.anneal_tolerance:
 				self.configuration.lr /= self.configuration.anneal_factor
 			last_epoch_loss = train_losses[-1]
@@ -394,9 +411,6 @@ class DOMBasedModel():
 					shutil.copyfile(f'{self.weights_path}.data-00000-of-00001', f'{self.best_weights_path}.data-00000-of-00001')
 					shutil.copyfile(f'{self.weights_path}.index', f'{self.best_weights_path}.index')
 					shutil.copyfile(f'{self.weights_path}.meta', f'{self.best_weights_path}.meta')
-			
-			#if epoch - best_val_epoch > self.configuration.patience_early_stopping:
-			#	TODO: stop training.
 			
 	def evaluate_testset(self):
 		test_predictions, test_losses = self.predict(self.test_trees, self.best_weights_path)
@@ -409,10 +423,14 @@ class DOMBasedModel():
 
 class DOMBasedModelWithLessParams(DOMBasedModel):
 	def __init__(self, configuration):
+		"""		
+				Setting up another version of DOM-based Model which uses 
+				less trainable weight variables.
+		"""
 		super().__init__(configuration)
 	
 	@overrides(DOMBasedModel)
-	def get_tensor(self, node):			
+	def get_tensor(self, node):		
 		if node.is_leaf == True:
 			with tf.variable_scope('bert_layer', reuse=True):
 				W_bert = tf.get_variable('W_bert')
@@ -469,6 +487,10 @@ class DOMBasedModelWithLessParams(DOMBasedModel):
 			
 class DOMBasedModelWithParamsForDepths(DOMBasedModel):
 	def __init__(self, configuration):
+		"""		
+				Setting up another version of DOM-based Model which has 
+				different weights for different depths.
+		"""
 		super().__init__(configuration)
 	
 	@overrides(DOMBasedModel)
@@ -530,6 +552,12 @@ class DOMBasedModelWithParamsForDepths(DOMBasedModel):
 
 class OrderedTree():
 	def __init__(self, tree, embed_size):
+		"""		
+				Used to prepare the data for Fast DOM Based Model
+				Args:
+					tree: A tree which resembles the DOM structure of HTML 
+					and its leaves contain the visible texts.
+		"""		
 		self.ordered_nodes = []
 		self.__flatten_tree__(tree.root)
 		self.isleaf = [node.is_leaf for node in self.ordered_nodes]
@@ -539,13 +567,22 @@ class OrderedTree():
 		self.label = tree.label
 		
 	def __flatten_tree__(self, node):
+		"""		
+				Used to flatten the tree using post-order, i.e. a node appears after all its children in the order.
+		"""		
 		for child in node.children:
 			self.__flatten_tree__(child)
 		self.ordered_nodes.append(node)	
 	
 class FastDOMBasedModelWithMean(DOMBasedModel):
 	def __init__(self, configuration):
-		
+		"""
+				Create a Fast DOM-based Model using an iterative method. 
+				It first flatten the trees and order nodes in the tree.
+				Then, one single computational graph is created for the 
+				purpose of training. In this verison, we take the mean of
+				children embeddings in the tree.
+		"""		
 		self.configuration = configuration
 		super().__init__(self.configuration)
 				
@@ -613,6 +650,7 @@ class FastDOMBasedModelWithMean(DOMBasedModel):
 			return tf.nn.relu(tf.add(tf.matmul(node_tensor, W_bert), b_bert))
 			
 		def get_internal_embedding(tensor_arr, node_index):	
+			# find children indices (indices in the flatten tree) of the node with id node_index
 			children_indices = tf.squeeze(tf.where(tf.equal(self.parentindex_placeholder, node_index)))	
 			all_tensors = tensor_arr.stack()
 			depth = tf.gather(self.depth_placeholder, node_index)
@@ -625,14 +663,17 @@ class FastDOMBasedModelWithMean(DOMBasedModel):
 		def body_subtree(tensor_arr, node_index):
 			isleaf = tf.gather(self.isleaf_placeholder, node_index)
 			node_tensor = tf.cond(isleaf, lambda: get_leaf_embedding(node_index), lambda: get_internal_embedding(tensor_arr, node_index))
-			node_tensor = tf.nn.dropout(node_tensor, rate=1.0 - self.configuration.keep_prob)									
-			tensor_arr = tensor_arr.write(node_index, node_tensor) # push back the tensor to the end of TensorArray
+			node_tensor = tf.nn.dropout(node_tensor, rate=1.0 - self.configuration.keep_prob)
+			# push back the tensor to the end of TensorArray									
+			tensor_arr = tensor_arr.write(node_index, node_tensor) 
 			node_index = tf.add(node_index, 1)
 			return tensor_arr, node_index		
 		
+		# use a tensor array to maintain the embeddings of nodes.
 		tensor_arr = tf.TensorArray(tf.float32, size=0, dynamic_size=True, clear_after_read=False, infer_shape=False)
 		N = tf.shape(self.parentindex_placeholder)[0]
 		condition = lambda tensor_arr, idx: tf.less(idx, N)
+		#fill out the TensorArray using while_loop in an iterative procedure.
 		self.tensor_arr, _ = tf.while_loop(condition, body_subtree, [tensor_arr, 0], parallel_iterations=1)
 		root_tensor = self.tensor_arr.read(self.tensor_arr.size() - 1)
 			
@@ -641,20 +682,17 @@ class FastDOMBasedModelWithMean(DOMBasedModel):
 		z = tf.nn.relu(tf.add(tf.matmul(z, W2), b2))
 		z = tf.nn.dropout(z, rate=1.0 - self.configuration.keep_prob)
 		logits = tf.add(tf.matmul(z, W_out), b_out)
-		#~ logits = tf.add(tf.matmul(root_tensor, W_out), b_out)
 		
 		def compute_loss(logits):
 			prediction_loss = tf.cond(self.multicase_placeholder, 
 									  lambda: tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=[tf.cast(self.label_placeholder, dtype='int32')])),
 									  lambda: tf.compat.v1.losses.mean_squared_error(tf.squeeze(logits), self.label_placeholder)) # we applied squeeze as we assume the batch size is 1
-			#~ return cross_entropy_loss # REMOVE L2 REGULATIONS
 			total_weight_loss = tf.reduce_sum([tf.nn.l2_loss(W) for W in Ws]) 
 			loss = self.configuration.l2 * total_weight_loss + prediction_loss
 			return loss		
 		
 		self.loss = compute_loss(logits)
 		self.probs = tf.squeeze(tf.nn.softmax(logits))
-		#self.optimizer = tf.train.GradientDescentOptimizer(self.configuration.lr).minimize(self.loss)
 		self.optimizer = tf.train.AdamOptimizer(self.configuration.adam_lr).minimize(self.loss)
 		self.prediction = tf.cond(self.multicase_placeholder, lambda: tf.cast(tf.squeeze(tf.argmax(logits, 1)), dtype='float32'), lambda: tf.squeeze(logits))
 
@@ -682,7 +720,6 @@ class FastDOMBasedModelWithMean(DOMBasedModel):
 				saver.restore(sess, self.weights_path)
 				
 			for pos, tree in enumerate(self.train_trees):
-				# TODO: enable to receive a batch of trees to be fed into the model
 				l, _ = sess.run([self.loss, self.optimizer], feed_dict=self.get_feed_dict(tree))
 				losses.append(l)
 					
@@ -727,6 +764,9 @@ class FastDOMBasedModelWithMean(DOMBasedModel):
 		return predictions, losses
 		
 	def predict_url(self, weight_path):
+		"""		
+				Predict the rating(or category) of url link given to the model
+		"""		
 		tree = OrderedTree(self.url_tree, self.configuration.bert_embedding_size)
 		with tf.Session() as sess:
 			saver = tf.train.Saver()
@@ -735,6 +775,10 @@ class FastDOMBasedModelWithMean(DOMBasedModel):
 			return y_pred, probs
 	
 class FastDOMBasedModelWithConcat(FastDOMBasedModelWithMean):
+	"""
+			This is another version of Fast DOM-based Model which concatenates 
+			the children embeddings and train them with a proper trainable parameters.
+	"""
 	def __init__(self, configuration):
 		
 		super(FastDOMBasedModelWithMean, self).__init__(configuration)
@@ -836,6 +880,10 @@ class FastDOMBasedModelWithConcat(FastDOMBasedModelWithMean):
 
 
 class FastDOMBasedModelWithMaxPooling(FastDOMBasedModelWithMean):
+	"""
+			This is another version of Fast DOM-based Model which applies 
+			max pooling on the children embeddings.
+	"""	
 	def __init__(self, configuration):
 		
 		super(FastDOMBasedModelWithMean, self).__init__(configuration)
@@ -856,13 +904,9 @@ class FastDOMBasedModelWithMaxPooling(FastDOMBasedModelWithMean):
 		
 		tf.disable_eager_execution()
 		
-		# a boolean tensorflow to determine if the problem is regression or classification
 		self.multicase_placeholder = tf.placeholder(tf.bool, [], name='ismulticase_placeholder')
-		# a boolean array to determine if a node is leaf or not
 		self.isleaf_placeholder = tf.placeholder(tf.bool, (None), name='isleaf_placeholder')
-		# an int array for bert embeddings of leaves		
 		self.bertembedd_placeholder = tf.placeholder(tf.float32, (None), name='bertembedd_placeholder')
-		# an int array to retrieve the parent of the node
 		self.parentindex_placeholder = tf.placeholder(tf.int32, (None), name='parentindex_placeholder')
 		self.label_placeholder = tf.placeholder(tf.int32, (None), name='label_placeholder')
 		self.depth_placeholder = tf.placeholder(tf.int32, (None), name='depth_placeholder')
@@ -949,32 +993,34 @@ def run_fast_DOM_based_model_with_mean(conf: Configuration):
 	start_time = time.time()
 	model.train_model()
 	print(f' Elapsed time (training of {type(model).__name__}) = {round(time.time() - start_time, 2)}s')
+	# Ignore dropout layers during test evaluation
 	model.configuration.keep_prob = 1.0
 	model.evaluate_testset()	
 	
 if __name__ == '__main__':	
 	parser = argparse.ArgumentParser(
-		description='Identifying Advertiser Quality from Their Websites'
+		description='Fast DOM Based Model -- Identifying Advertiser Quality from Their Websites'
 	)
 	parser.add_argument('--tasktype', help='(C) Classification or (R)Regression', choices=['C', 'R'])
 	parser.add_argument('--input_directory', help='Directory for train and test data', default=None)
-	parser.add_argument('--adam_lr', help='Adam learning rate', default=1e-5)
-	parser.add_argument('--n_epochs', help='Numbrt of epochs', default=20)
-	parser.add_argument('--l2', help='L2 regularization factor', default=0.0001)
-	parser.add_argument('--val_split_ratio', help='Validation size ration', default=0.2)
-	parser.add_argument('--max_depth', help='Maximum depth for DOM based model', default=4)
+	parser.add_argument('--adam_lr', help='Adam learning rate', default=1e-5, type=float)
+	parser.add_argument('--n_epochs', help='Numbrt of epochs', default=20, type=int)
+	parser.add_argument('--l2', help='L2 regularization factor', default=0.0001, type=float)
+	parser.add_argument('--val_split_ratio', help='Validation size ration', default=0.2, type=float)
+	parser.add_argument('--max_depth', help='Maximum depth for DOM based model', default=4, type=int)
 	parser.add_argument('--bert_folder_path', help='Folder path of model BERT', default=os.path.join('/home/vahidsanei_google_com/', 'data','uncased_L-12_H-768_A-12'))
-	parser.add_argument('--bert_embedding_size', help='BERT output embedding size', default=768)
-	parser.add_argument('--embedding_size', help='DOM-based model output Embedding size', default=256)
-	parser.add_argument('--keep_prob', help='Kept rate of dropout layers', default=0.6)
-	parser.add_argument('--max_content_length', help='Maximum content length of from each leaf of DOM', default=128)
+	parser.add_argument('--bert_embedding_size', help='BERT output embedding size', default=768, type=int)
+	parser.add_argument('--embedding_size', help='DOM-based model output Embedding size', default=256, type=int)
+	parser.add_argument('--keep_prob', help='Kept rate of dropout layers', default=0.6, type=float)
+	parser.add_argument('--max_content_length', help='Maximum content length of from each leaf of DOM', default=128, type=float)
 	parser.add_argument('--url', help='URL link of business website', default=None)
 	parser.add_argument('--best_weight_path', help='URL link of business website', default=None)
+	parser.add_argument('--chrome_path', help='The path to chrome engine for Python package selenium', default=CHROME_PATH)
 	
 	st_args = utils.style()
 	print(f'{st_args.BOLD}{st_args.RED}',end='')
 	args = parser.parse_args()
-	print(st_args.RESET)
+	print(st_args.RESET, end='')
 	
 	if args.tasktype == 'C':
 		is_multicase = True
@@ -989,8 +1035,8 @@ if __name__ == '__main__':
 		else:
 			best_weight_path = args.best_weight_path
 			
-		with suppress_stdout(), suppress_sterr():
-			conf = Configuration(bert_folder_path=args.bert_folder_path, n_classes=len(class_names), url_link=args.url, is_multicase=is_multicase, keep_prob=1.0)
+		with utils.suppress_stdout(), utils.suppress_sterr():
+			conf = Configuration(bert_folder_path=args.bert_folder_path, n_classes=len(class_names), url_link=args.url, is_multicase=is_multicase, keep_prob=1.0, chrome_path=args.chrome_path)
 			FDBM = FastDOMBasedModelWithMean(conf)
 		
 		st = utils.style()
@@ -1012,8 +1058,12 @@ if __name__ == '__main__':
 			
 		input_df_train = pd.read_csv(os.path.join(input_directory, 'train.csv'))
 		input_df_test = pd.read_csv(os.path.join(input_directory, 'test.csv'))
+		
+		input_df_train = input_df_train[:20]
+		input_df_test = input_df_test[:100]
+		
 		conf = Configuration(input_df_train=input_df_train, input_df_test=input_df_test, adam_lr=args.adam_lr, n_epochs=args.n_epochs, l2=args.l2, val_split_ratio=args.val_split_ratio, 
 			max_depth=args.max_depth, n_classes=len(class_names), bert_folder_path=args.bert_folder_path, bert_embedding_size=args.bert_embedding_size, 
-			embedding_size=args.embedding_size, keep_prob=args.keep_prob, max_content_length=args.max_content_length, is_multicase=is_multicase, verbose=1, url_link=None)
+			embedding_size=args.embedding_size, keep_prob=args.keep_prob, max_content_length=args.max_content_length, is_multicase=is_multicase, verbose=1, url_link=None, chrome_path=args.chrome_path)
 
 		run_fast_DOM_based_model_with_mean(conf)		
