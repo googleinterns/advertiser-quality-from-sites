@@ -173,7 +173,6 @@ optional arguments:
   --chrome_path CHROME_PATH
                         The path to chrome engine for Python package selenium
 ```
-/home/vahidsanei_google_com/advertiser-quality-from-sites/source/image_example/demo-shortversion.gif
 ## Demo
 Here is a demo of FDBM for predicting the category and rating of businesses given their url links:
 <p align="center">
