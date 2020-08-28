@@ -1,5 +1,7 @@
 import sys, os
 
+sys.path.append(os.getcwd() + '/..')
+
 from source.utils.utils import clean_text
 import pytest
 
