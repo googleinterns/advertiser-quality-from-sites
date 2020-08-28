@@ -179,6 +179,7 @@ Here is a demo of FDBM for predicting the category and rating of businesses give
 <p align="center">
   <img src="https://github.com/googleinterns/advertiser-quality-from-sites/blob/master/source/image_example/demo-shortversion.gif"/>
 </p>
+
 ## License
 
 Apache 2.0; see [LICENSE](LICENSE) for details.
