@@ -17,4 +17,4 @@ matplotlib==3.3.0
 scipy==1.4.1
 bert==2.2.0
 scikit_learn==0.23.2
-
+setuptools
