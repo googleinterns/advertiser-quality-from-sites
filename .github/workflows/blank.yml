@@ -9,4 +9,4 @@ jobs:
     - name: GitHub Action for pytest
       uses: cclauss/GitHub-Action-for-pytest@master
       with:
-        args: python setup.py develop && pytest
+        args: pip install -r requirements.txt && pip python setup.py develop && pytest
