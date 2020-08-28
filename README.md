@@ -5,7 +5,7 @@ Intuitively, for an ad campaign, the quality of the advertiser’s business itse
 
 Our methods to preproess the data and our neural network models are built upon Python 3, Tensorflow on CPU and GPUs. We developed two neural network models: 1) baseline model 2) DOM-based models. Both approaches use BERT-Base model with 12 layers. Further ahead, we show how to run our codes to retrieve url links, HTMLs, clearning visible texts, visualizing DOM structures, and also we show how to run our NN models to train the data and to predict the category/rating of urls links.
 
-## Usage Instructions
+## Instructions
 
 ### 1. Data Preprocessing
 All methods for preprocessing step are located at folder [utils](https://github.com/googleinterns/advertiser-quality-from-sites/tree/master/source/utils). Here, we show how to run the code.
@@ -83,7 +83,7 @@ def get_train_test #split the data to training and test sets.
 )** \
 This file contains several functions for converting an HTML to tree strings, a data structure for maining trees, data balancing based on the labels of trees, get the stats of trees including the number of nodes, maximum depths, and their maximum branches.
 
-### 2. Our Models
+### 2. Models
 **Baseline model: [baseline_model.py](https://github.com/googleinterns/advertiser-quality-from-sites/blob/master/source/baseline/baseline_model.py)** \
 This code is our baseline model, which prepares the data for the model by a preprocessing step for converting texts into BERT embeddings. Then, the model starts to train and finally evaluates the test set. The other option to this model is to pass a url links and get the prediction of its category or rating. Here are the parameters for running the code:
 ```python
