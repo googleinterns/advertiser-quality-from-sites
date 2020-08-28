@@ -8,4 +8,9 @@ jobs:
     - name: Run pytest
       uses: cclauss/GitHub-Action-for-pytest@master
       with:
-          args: sudo python3 -m pip install --upgrade pip && sudo apt-get install -y python3-setuptools && sudo python3 -m pip install --upgrade setuptools && sudo pip install -r requirements.txt && python setup.py develop && pytest && 
+          args: |
+          sudo python3 -m pip install --upgrade pip
+          sudo apt-get install -y python3-setuptools
+          sudo python3 -m pip install --upgrade setuptools
+          sudo pip install -r requirements.txt
+          python setup.py develop && pytest
