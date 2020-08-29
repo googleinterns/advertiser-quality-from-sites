@@ -7,11 +7,14 @@ Our methods to preproess the data and our neural network models are built upon P
 
 ## Instructions
 
-### 1. Data Preprocessing
+### 1. Setup
+The required packages are listed in [requirements.txt](https://github.com/googleinterns/advertiser-quality-from-sites/blob/master/requirements.txt). You also need to install [setup.py](https://github.com/googleinterns/advertiser-quality-from-sites/blob/master/setup.py). For testing, please go ahead and click on [Actions](https://github.com/googleinterns/advertiser-quality-from-sites/actions), shown above, to run a workflow.
+
+### 2. Data Preprocessing
 All methods for preprocessing step are located at folder [utils](https://github.com/googleinterns/advertiser-quality-from-sites/tree/master/source/utils). Here, we show how to run the code.
 
 **Get HTMLS of URL Links: [get_HTMLs_from_urls.py](https://github.com/googleinterns/advertiser-quality-from-sites/blob/master/source/utils/get_HTMLs_from_urls.py)** \
-This code gets input path of url links which is basically a text file where every line contains a url link. It also gets a dataframe as the input that has information of businesses which are ordered the same order as the order of url links in the text file. It extracts the HTML contents of urls and store a data frame with the extractd HTMLs in the output directory address.
+This code gets input path of url links which is basically a text file where every line contains a url link. It also gets a dataframe as the input that has information of businesses which are ordered the same order as the order of url links in the text file. It extracts the HTML contents of urls and store a data frame with the extractd HTMLs in the output directory address. Note that the url links are extract from Yelp page. Please check [generate_input_data.ipynb](https://github.com/googleinterns/advertiser-quality-from-sites/blob/master/source/utils/retrieve_url_links.ipynb) to see how we save the url links in a text file.
 ```python
 usage: get_HTMLs_from_urls.py [-h] [--input_path INPUT_PATH]
                               [--urllinks_path URLLINKS_PATH]
@@ -81,9 +84,9 @@ def get_train_test #split the data to training and test sets.
 ```
 **Tree Library and its helper functions: [tree_lib.py](https://github.com/googleinterns/advertiser-quality-from-sites/blob/master/source/recursive_model/tree_lib.py
 )** \
-This file contains several functions for converting an HTML to tree strings, a data structure for maining trees, data balancing based on the labels of trees, get the stats of trees including the number of nodes, maximum depths, and their maximum branches.
+This file contains several functions for converting an HTML to tree strings, a data structure for maining trees, data balancing based on the labels of trees, get the stats of trees including the number of nodes, maximum depths, and their maximum branches. In [generate_input_data.ipynb](https://github.com/googleinterns/advertiser-quality-from-sites/blob/master/source/generate_input_data.ipynb), we generate trees and save them in a dataframe.
 
-### 2. Models
+### 3. Models
 **Baseline model: [baseline_model.py](https://github.com/googleinterns/advertiser-quality-from-sites/blob/master/source/baseline/baseline_model.py)** \
 This code is our baseline model, which prepares the data for the model by a preprocessing step for converting texts into BERT embeddings. Then, the model starts to train and finally evaluates the test set. The other option to this model is to pass a url links and get the prediction of its category or rating. Here are the parameters for running the code:
 ```python
